@@ -42,38 +42,54 @@ def migrate_database():
     conn = get_db_connection()
     c = conn.cursor()
     
+    # Проверяем и добавляем колонку category в таблице templates
     try:
-        # Проверяем существование колонки category в таблице templates
         c.execute("SELECT category FROM templates LIMIT 1")
     except sqlite3.OperationalError:
-        # Добавляем колонку если её нет
-        c.execute("ALTER TABLE templates ADD COLUMN category TEXT DEFAULT 'Общие'")
-        conn.commit()
+        try:
+            c.execute("ALTER TABLE templates ADD COLUMN category TEXT DEFAULT 'Общие'")
+            conn.commit()
+        except:
+            pass
     
+    # Проверяем и добавляем колонки в таблице rss_sources
     try:
-        # Проверяем существование колонки enabled в таблице rss_sources
         c.execute("SELECT enabled FROM rss_sources LIMIT 1")
     except sqlite3.OperationalError:
-        # Добавляем колонку если её нет
-        c.execute("ALTER TABLE rss_sources ADD COLUMN enabled BOOLEAN DEFAULT 1")
-        c.execute("ALTER TABLE rss_sources ADD COLUMN last_fetch TIMESTAMP")
-        conn.commit()
+        try:
+            c.execute("ALTER TABLE rss_sources ADD COLUMN enabled BOOLEAN DEFAULT 1")
+            conn.commit()
+        except:
+            pass
     
     try:
-        # Проверяем существование колонки is_active в таблице auto_posting_rules
+        c.execute("SELECT last_fetch FROM rss_sources LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            c.execute("ALTER TABLE rss_sources ADD COLUMN last_fetch TIMESTAMP")
+            conn.commit()
+        except:
+            pass
+    
+    # Проверяем и добавляем колонку is_active в таблице auto_posting_rules
+    try:
         c.execute("SELECT is_active FROM auto_posting_rules LIMIT 1")
     except sqlite3.OperationalError:
-        # Добавляем колонку если её нет
-        c.execute("ALTER TABLE auto_posting_rules ADD COLUMN is_active BOOLEAN DEFAULT 1")
-        conn.commit()
+        try:
+            c.execute("ALTER TABLE auto_posting_rules ADD COLUMN is_active BOOLEAN DEFAULT 1")
+            conn.commit()
+        except:
+            pass
     
+    # Проверяем и добавляем колонку media_count в таблице posts
     try:
-        # Проверяем существование колонки media_count в таблице posts
         c.execute("SELECT media_count FROM posts LIMIT 1")
     except sqlite3.OperationalError:
-        # Добавляем колонку если её нет
-        c.execute("ALTER TABLE posts ADD COLUMN media_count INTEGER DEFAULT 0")
-        conn.commit()
+        try:
+            c.execute("ALTER TABLE posts ADD COLUMN media_count INTEGER DEFAULT 0")
+            conn.commit()
+        except:
+            pass
     
     conn.close()
 
@@ -658,7 +674,14 @@ with st.sidebar:
     st.write("---")
     
     # Профили
-    profiles = [dict(r) for r in conn.execute("SELECT * FROM profiles").fetchall()]
+    profiles = []
+    try:
+        profiles = [dict(r) for r in conn.execute("SELECT * FROM profiles").fetchall()]
+    except:
+        profiles = []
+    
+    if not profiles:
+        profiles = [{'name': 'Основной', 'tg_token': '', 'tg_chat': '', 'vk_token': '', 'vk_chat': ''}]
     
     # Управление профилями
     with st.expander("👤 Профили"):
@@ -670,25 +693,31 @@ with st.sidebar:
         elif action == "Создать новый":
             new_profile_name = st.text_input("Название профиля")
             if st.button("Создать") and new_profile_name:
-                conn.execute("INSERT INTO profiles (name, tg_token, tg_chat, vk_token, vk_chat) VALUES (?, '', '', '', '')",
-                           (new_profile_name,))
-                conn.commit()
-                st.success(f"Профиль '{new_profile_name}' создан")
-                st.rerun()
-            active = profiles[0] if profiles else {'name': 'Основной', 'tg_token': '', 'tg_chat': '', 'vk_token': '', 'vk_chat': ''}
+                try:
+                    conn.execute("INSERT INTO profiles (name, tg_token, tg_chat, vk_token, vk_chat) VALUES (?, '', '', '', '')",
+                               (new_profile_name,))
+                    conn.commit()
+                    st.success(f"Профиль '{new_profile_name}' создан")
+                    st.rerun()
+                except:
+                    st.error("Ошибка создания профиля")
+            active = profiles[0]
         elif action == "Удалить":
             if len(profiles) > 1:
                 del_name = st.selectbox("Выберите для удаления", [p['name'] for p in profiles if p['name'] != 'Основной'])
                 if st.button("Удалить", type="primary") and del_name:
-                    conn.execute("DELETE FROM profiles WHERE name=?", (del_name,))
-                    conn.commit()
-                    st.success("Профиль удален")
-                    st.rerun()
+                    try:
+                        conn.execute("DELETE FROM profiles WHERE name=?", (del_name,))
+                        conn.commit()
+                        st.success("Профиль удален")
+                        st.rerun()
+                    except:
+                        st.error("Ошибка удаления профиля")
             else:
                 st.info("Нельзя удалить последний профиль")
-            active = profiles[0] if profiles else {'name': 'Основной', 'tg_token': '', 'tg_chat': '', 'vk_token': '', 'vk_chat': ''}
+            active = profiles[0]
         else:
-            active = profiles[0] if profiles else {'name': 'Основной', 'tg_token': '', 'tg_chat': '', 'vk_token': '', 'vk_chat': ''}
+            active = profiles[0]
     
     if active:
         st.subheader("📱 ВКонтакте")
@@ -700,12 +729,15 @@ with st.sidebar:
         t_c = st.text_input("Chat ID", value=active.get('tg_chat', ''))
         
         if st.button("💾 Сохранить профиль", use_container_width=True):
-            conn.execute("""UPDATE profiles 
-                          SET tg_token=?, tg_chat=?, vk_token=?, vk_chat=? 
-                          WHERE name=?""", 
-                        (t_t, t_c, v_t, v_c, active['name']))
-            conn.commit()
-            st.success("✅ Настройки сохранены")
+            try:
+                conn.execute("""UPDATE profiles 
+                              SET tg_token=?, tg_chat=?, vk_token=?, vk_chat=? 
+                              WHERE name=?""", 
+                            (t_t, t_c, v_t, v_c, active['name']))
+                conn.commit()
+                st.success("✅ Настройки сохранены")
+            except:
+                st.error("Ошибка сохранения")
     
     st.write("---")
     
@@ -729,12 +761,18 @@ with st.sidebar:
             st.success("Кэш очищен")
         
         if st.button("💾 Резервная копия БД", use_container_width=True):
-            backup_file = backup_database()
-            st.success(f"Резервная копия создана: {backup_file}")
+            try:
+                backup_file = backup_database()
+                st.success(f"Резервная копия создана: {backup_file}")
+            except:
+                st.error("Ошибка создания резервной копии")
         
         if st.button("🔄 Обновить RSS", use_container_width=True):
-            new_count = fetch_rss_news()
-            st.success(f"Загружено новостей: {new_count}")
+            try:
+                new_count = fetch_rss_news()
+                st.success(f"Загружено новостей: {new_count}")
+            except:
+                st.error("Ошибка обновления RSS")
 
 # Основные вкладки
 tabs = st.tabs(["📝 Редактор", "📰 Новости", "📋 Шаблоны", "📅 Календарь", 
@@ -759,11 +797,14 @@ with tabs[0]:
             tags = st.text_input("Хэштеги", placeholder="#тег1 #тег2")
         with col_suggest:
             if st.button("💡 Предложить теги", use_container_width=True) and text:
-                suggestions = generate_hashtag_suggestions(text)
-                if suggestions:
-                    st.write("Предложенные теги:")
-                    for tag in suggestions:
-                        st.code(tag)
+                try:
+                    suggestions = generate_hashtag_suggestions(text)
+                    if suggestions:
+                        st.write("Предложенные теги:")
+                        for tag in suggestions:
+                            st.code(tag)
+                except:
+                    st.info("Не удалось сгенерировать предложения")
         
         # Медиа файлы
         st.subheader("Медиа файлы")
@@ -800,7 +841,10 @@ with tabs[0]:
         if post_now:
             run_dt = datetime.now()
         else:
-            run_dt = datetime.combine(post_date, post_time)
+            if post_date and post_time:
+                run_dt = datetime.combine(post_date, post_time)
+            else:
+                run_dt = datetime.now()
         
         # Дополнительные опции
         with st.expander("⚙️ Дополнительные настройки"):
@@ -826,7 +870,10 @@ with tabs[0]:
                         
                         # Сжатие изображений если нужно
                         if compress_images and f.type.startswith('image/'):
-                            file_data = compress_image(file_data, max_img_size)
+                            try:
+                                file_data = compress_image(file_data, max_img_size)
+                            except:
+                                pass
                         
                         name = f"{datetime.now().strftime('%H%M%S')}_{random.randint(1000,9999)}_{f.name}"
                         path = os.path.join("uploads", name)
@@ -840,54 +887,57 @@ with tabs[0]:
                     final_text = f"{text}\n\n{tags}"
                 
                 # Сохранение в БД
-                cur = conn.cursor()
-                cur.execute("""INSERT INTO posts 
-                             (scheduled_time, text, platforms, status, full_text, media_count) 
-                             VALUES (?,?,?,?,?,?)""",
-                          (run_dt.strftime("%Y-%m-%d %H:%M"), 
-                           final_text[:100] + "...", 
-                           "VK+TG", 
-                           "⏳ В очереди", 
-                           final_text,
-                           len(paths)))
-                post_id = cur.lastrowid
-                conn.commit()
-                
-                # Планирование задачи
-                if post_now:
-                    # Публикация сразу
-                    execute_post(
-                        final_text, paths,
-                        {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
-                        {"parse_mode": tg_pm, "silent": tg_silent, "protect": tg_protect},
-                        {"from_group": vk_fg, "close_comments": vk_close},
-                        post_id
-                    )
-                    st.success("✅ Пост опубликован!")
-                else:
-                    # Отложенная публикация
-                    scheduler.add_job(
-                        execute_post, 'date', run_date=run_dt,
-                        args=[
+                try:
+                    cur = conn.cursor()
+                    cur.execute("""INSERT INTO posts 
+                                 (scheduled_time, text, platforms, status, full_text, media_count) 
+                                 VALUES (?,?,?,?,?,?)""",
+                              (run_dt.strftime("%Y-%m-%d %H:%M"), 
+                               final_text[:100] + "...", 
+                               "VK+TG", 
+                               "⏳ В очереди", 
+                               final_text,
+                               len(paths)))
+                    post_id = cur.lastrowid
+                    conn.commit()
+                    
+                    # Планирование задачи
+                    if post_now:
+                        # Публикация сразу
+                        execute_post(
                             final_text, paths,
                             {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
                             {"parse_mode": tg_pm, "silent": tg_silent, "protect": tg_protect},
                             {"from_group": vk_fg, "close_comments": vk_close},
                             post_id
-                        ]
-                    )
-                    st.success(f"✅ Задача запланирована на {run_dt.strftime('%H:%M %d.%m.%Y')}")
-                
-                # Добавление в календарь
-                if add_to_calendar:
-                    conn.execute("""INSERT INTO content_calendar 
-                                  (date, time, topic, description, status) 
-                                  VALUES (?, ?, ?, ?, 'planned')""",
-                               (run_dt.date(), run_dt.time(), 
-                                final_text[:50], final_text[:200]))
-                    conn.commit()
-                
-                st.rerun()
+                        )
+                        st.success("✅ Пост опубликован!")
+                    else:
+                        # Отложенная публикация
+                        scheduler.add_job(
+                            execute_post, 'date', run_date=run_dt,
+                            args=[
+                                final_text, paths,
+                                {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
+                                {"parse_mode": tg_pm, "silent": tg_silent, "protect": tg_protect},
+                                {"from_group": vk_fg, "close_comments": vk_close},
+                                post_id
+                            ]
+                        )
+                        st.success(f"✅ Задача запланирована на {run_dt.strftime('%H:%M %d.%m.%Y')}")
+                    
+                    # Добавление в календарь
+                    if add_to_calendar:
+                        conn.execute("""INSERT INTO content_calendar 
+                                      (date, time, topic, description, status) 
+                                      VALUES (?, ?, ?, ?, 'planned')""",
+                                   (run_dt.date(), run_dt.time(), 
+                                    final_text[:50], final_text[:200]))
+                        conn.commit()
+                    
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Ошибка при публикации: {str(e)}")
     
     with col_preview:
         st.subheader("Предпросмотр")
@@ -918,14 +968,22 @@ with tabs[1]:
         with col_src2:
             if st.button("➕ Добавить источник", use_container_width=True):
                 if new_src_url and new_src_name:
-                    conn.execute("INSERT INTO rss_sources (url, name, enabled) VALUES (?, ?, 1)",
-                               (new_src_url, new_src_name))
-                    conn.commit()
-                    st.success("Источник добавлен")
-                    st.rerun()
+                    try:
+                        conn.execute("INSERT INTO rss_sources (url, name, enabled) VALUES (?, ?, 1)",
+                                   (new_src_url, new_src_name))
+                        conn.commit()
+                        st.success("Источник добавлен")
+                        st.rerun()
+                    except:
+                        st.error("Ошибка добавления источника")
         
         # Список источников
-        sources = conn.execute("SELECT * FROM rss_sources").fetchall()
+        sources = []
+        try:
+            sources = conn.execute("SELECT * FROM rss_sources").fetchall()
+        except:
+            sources = []
+        
         for source in sources:
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
@@ -934,60 +992,83 @@ with tabs[1]:
             with col2:
                 # Безопасная проверка поля enabled
                 try:
-                    is_enabled = bool(source['enabled'])
-                except (KeyError, IndexError):
+                    is_enabled = bool(dict(source).get('enabled', True))
+                except:
                     is_enabled = True
                 enabled = st.checkbox("Активен", value=is_enabled, 
                                     key=f"enabled_{source['id']}")
                 if enabled != is_enabled:
-                    conn.execute("UPDATE rss_sources SET enabled=? WHERE id=?",
-                               (int(enabled), source['id']))
-                    conn.commit()
+                    try:
+                        conn.execute("UPDATE rss_sources SET enabled=? WHERE id=?",
+                                   (int(enabled), source['id']))
+                        conn.commit()
+                    except:
+                        pass
             with col3:
                 if st.button("🗑", key=f"del_src_{source['id']}"):
-                    conn.execute("DELETE FROM rss_sources WHERE id=?", (source['id'],))
-                    conn.commit()
-                    st.rerun()
+                    try:
+                        conn.execute("DELETE FROM rss_sources WHERE id=?", (source['id'],))
+                        conn.commit()
+                        st.rerun()
+                    except:
+                        st.error("Ошибка удаления")
     
     # Кнопки управления
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
         if st.button("🔄 Обновить все", use_container_width=True):
-            count = fetch_rss_news()
-            st.success(f"Загружено новостей: {count}")
+            try:
+                count = fetch_rss_news()
+                st.success(f"Загружено новостей: {count}")
+            except:
+                st.error("Ошибка обновления")
     with col2:
         if st.button("📤 Экспорт в CSV", use_container_width=True):
-            news_df = pd.read_sql_query("SELECT * FROM rss_news ORDER BY pub_date DESC", conn)
-            csv = news_df.to_csv(index=False)
-            st.download_button("Скачать CSV", csv, "rss_news.csv", "text/csv")
+            try:
+                news_df = pd.read_sql_query("SELECT * FROM rss_news ORDER BY pub_date DESC", conn)
+                csv = news_df.to_csv(index=False)
+                st.download_button("Скачать CSV", csv, "rss_news.csv", "text/csv")
+            except:
+                st.error("Ошибка экспорта")
     
     # Автопостинг
     with st.expander("🤖 Автоматическая публикация новостей"):
-        rules = conn.execute("SELECT * FROM auto_posting_rules").fetchall()
+        rules = []
+        try:
+            rules = conn.execute("SELECT * FROM auto_posting_rules").fetchall()
+        except:
+            rules = []
         
         if rules:
             for rule in rules:
+                rule_dict = dict(rule)
                 col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
                 with col1:
-                    st.write(f"**{rule['name']}**")
+                    st.write(f"**{rule_dict.get('name', '')}**")
                 with col2:
-                    st.write(f"Каждые {rule['interval_hours']}ч")
+                    st.write(f"Каждые {rule_dict.get('interval_hours', 0)}ч")
                 with col3:
                     try:
-                        is_active = bool(rule['is_active'])
-                    except (KeyError, IndexError):
+                        is_active = bool(rule_dict.get('is_active', True))
+                    except:
                         is_active = True
                     active = st.checkbox("Активно", value=is_active,
-                                       key=f"rule_active_{rule['id']}")
+                                       key=f"rule_active_{rule_dict['id']}")
                     if active != is_active:
-                        conn.execute("UPDATE auto_posting_rules SET is_active=? WHERE id=?",
-                                   (int(active), rule['id']))
-                        conn.commit()
+                        try:
+                            conn.execute("UPDATE auto_posting_rules SET is_active=? WHERE id=?",
+                                       (int(active), rule_dict['id']))
+                            conn.commit()
+                        except:
+                            pass
                 with col4:
-                    if st.button("🗑", key=f"del_rule_{rule['id']}"):
-                        conn.execute("DELETE FROM auto_posting_rules WHERE id=?", (rule['id'],))
-                        conn.commit()
-                        st.rerun()
+                    if st.button("🗑", key=f"del_rule_{rule_dict['id']}"):
+                        try:
+                            conn.execute("DELETE FROM auto_posting_rules WHERE id=?", (rule_dict['id'],))
+                            conn.commit()
+                            st.rerun()
+                        except:
+                            st.error("Ошибка удаления")
         
         st.write("---")
         st.write("**Создать новое правило:**")
@@ -996,49 +1077,64 @@ with tabs[1]:
         with col1:
             rule_interval = st.number_input("Интервал (часы)", 1, 168, 6)
         with col2:
-            templates_list = conn.execute("SELECT name FROM templates").fetchall()
+            templates_list = []
+            try:
+                templates_list = conn.execute("SELECT name FROM templates").fetchall()
+            except:
+                pass
             if templates_list:
                 rule_template = st.selectbox("Шаблон", [t['name'] for t in templates_list])
             else:
                 rule_template = st.text_input("Текст шаблона")
         
         if st.button("Создать правило") and rule_name:
-            conn.execute("""INSERT INTO auto_posting_rules 
-                          (name, source_type, interval_hours, template, is_active) 
-                          VALUES (?, 'rss', ?, ?, 1)""",
-                       (rule_name, rule_interval, rule_template))
-            conn.commit()
-            st.success("Правило создано")
-            st.rerun()
+            try:
+                conn.execute("""INSERT INTO auto_posting_rules 
+                              (name, source_type, interval_hours, template, is_active) 
+                              VALUES (?, 'rss', ?, ?, 1)""",
+                           (rule_name, rule_interval, rule_template))
+                conn.commit()
+                st.success("Правило создано")
+                st.rerun()
+            except:
+                st.error("Ошибка создания правила")
     
     # Отображение новостей
     st.write("---")
-    news = conn.execute("""SELECT * FROM rss_news 
-                          ORDER BY pub_date DESC LIMIT 20""").fetchall()
+    news = []
+    try:
+        news = conn.execute("""SELECT * FROM rss_news 
+                              ORDER BY pub_date DESC LIMIT 20""").fetchall()
+    except:
+        news = []
     
     if news:
         for item in news:
+            item_dict = dict(item)
             with st.container():
-                st.write(f"### {item['title']}")
-                st.caption(f"📅 {item['pub_date']}")
-                st.write(item['summary'])
+                st.write(f"### {item_dict.get('title', '')}")
+                st.caption(f"📅 {item_dict.get('pub_date', '')}")
+                st.write(item_dict.get('summary', ''))
                 
                 col1, col2, col3 = st.columns([1, 1, 2])
                 with col1:
-                    if st.button("📝 В редактор", key=f"use_{item['id']}", use_container_width=True):
-                        st.session_state.draft = f"{item['title']}\n\n{item['summary']}\n\n{item['link']}"
+                    if st.button("📝 В редактор", key=f"use_{item_dict['id']}", use_container_width=True):
+                        st.session_state.draft = f"{item_dict.get('title', '')}\n\n{item_dict.get('summary', '')}\n\n{item_dict.get('link', '')}"
                         st.rerun()
                 with col2:
-                    if st.button("🚀 Опубликовать", key=f"pub_{item['id']}", use_container_width=True):
-                        text = f"{item['title']}\n\n{item['summary']}\n\n{item['link']}"
-                        execute_post(text, [], 
-                                   {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
-                                   {"parse_mode": "HTML"}, {"from_group": True}, item['id'])
-                        conn.execute("UPDATE rss_news SET is_used=1 WHERE id=?", (item['id'],))
-                        conn.commit()
-                        st.success("Новость опубликована!")
+                    if st.button("🚀 Опубликовать", key=f"pub_{item_dict['id']}", use_container_width=True):
+                        text = f"{item_dict.get('title', '')}\n\n{item_dict.get('summary', '')}\n\n{item_dict.get('link', '')}"
+                        try:
+                            execute_post(text, [], 
+                                       {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
+                                       {"parse_mode": "HTML"}, {"from_group": True}, item_dict['id'])
+                            conn.execute("UPDATE rss_news SET is_used=1 WHERE id=?", (item_dict['id'],))
+                            conn.commit()
+                            st.success("Новость опубликована!")
+                        except:
+                            st.error("Ошибка публикации")
                 with col3:
-                    st.write(f"[🔗 Открыть источник]({item['link']})")
+                    st.write(f"[🔗 Открыть источник]({item_dict.get('link', '')})")
                 st.write("---")
     else:
         st.info("Нет новостей. Нажмите 'Обновить все' для загрузки.")
@@ -1065,50 +1161,65 @@ with tabs[2]:
         
         if st.button("💾 Сохранить шаблон", use_container_width=True):
             if tm_name and tm_content:
-                conn.execute("""INSERT OR REPLACE INTO templates (name, content, category) 
-                              VALUES (?, ?, ?)""", 
-                           (tm_name, tm_content, tm_category))
-                conn.commit()
-                st.success("✅ Шаблон сохранен")
-                st.rerun()
+                try:
+                    conn.execute("""INSERT OR REPLACE INTO templates (name, content, category) 
+                                  VALUES (?, ?, ?)""", 
+                               (tm_name, tm_content, tm_category))
+                    conn.commit()
+                    st.success("✅ Шаблон сохранен")
+                    st.rerun()
+                except:
+                    st.error("Ошибка сохранения шаблона")
     
     with col2:
         st.write("### Библиотека шаблонов")
         
         # Безопасное получение категорий
+        category_list = ["Все"]
         try:
             categories = conn.execute("SELECT DISTINCT category FROM templates").fetchall()
-            category_list = ["Все"] + [c['category'] for c in categories if c['category']]
+            for c in categories:
+                if c['category']:
+                    category_list.append(c['category'])
         except:
             category_list = ["Все", "Общие", "Новости", "Акции", "Техподдержка", "Другое"]
         
         filter_cat = st.selectbox("Фильтр по категории", category_list)
         
-        if filter_cat == "Все":
-            templates = conn.execute("SELECT * FROM templates ORDER BY name").fetchall()
-        else:
-            templates = conn.execute("SELECT * FROM templates WHERE category=? ORDER BY name",
-                                   (filter_cat,)).fetchall()
+        templates = []
+        try:
+            if filter_cat == "Все":
+                templates = conn.execute("SELECT * FROM templates ORDER BY name").fetchall()
+            else:
+                templates = conn.execute("SELECT * FROM templates WHERE category=? ORDER BY name",
+                                       (filter_cat,)).fetchall()
+        except:
+            templates = []
         
         if templates:
             for tm in templates:
-                with st.expander(f"📄 {tm['name']} [{tm.get('category', 'Общие')}]"):
-                    st.text_area("Содержание", tm['content'], height=100, disabled=True,
-                               key=f"view_{tm['name']}")
+                tm_dict = dict(tm)
+                category = tm_dict.get('category', 'Общие') if tm_dict.get('category') else 'Общие'
+                with st.expander(f"📄 {tm_dict['name']} [{category}]"):
+                    st.text_area("Содержание", tm_dict['content'], height=100, disabled=True,
+                               key=f"view_{tm_dict['name']}")
                     
                     col1, col2, col3 = st.columns([1, 1, 1])
                     with col1:
-                        if st.button("✏️ Использовать", key=f"use_tmpl_{tm['name']}"):
-                            st.session_state.draft = tm['content']
+                        if st.button("✏️ Использовать", key=f"use_tmpl_{tm_dict['name']}"):
+                            st.session_state.draft = tm_dict['content']
                             st.rerun()
                     with col2:
-                        if st.button("📋 Копировать", key=f"copy_{tm['name']}"):
-                            st.code(tm['content'])
+                        if st.button("📋 Копировать", key=f"copy_{tm_dict['name']}"):
+                            st.code(tm_dict['content'])
                     with col3:
-                        if st.button("🗑 Удалить", key=f"del_tmpl_{tm['name']}"):
-                            conn.execute("DELETE FROM templates WHERE name=?", (tm['name'],))
-                            conn.commit()
-                            st.rerun()
+                        if st.button("🗑 Удалить", key=f"del_tmpl_{tm_dict['name']}"):
+                            try:
+                                conn.execute("DELETE FROM templates WHERE name=?", (tm_dict['name'],))
+                                conn.commit()
+                                st.rerun()
+                            except:
+                                st.error("Ошибка удаления")
         else:
             st.info("Нет шаблонов в выбранной категории")
 
@@ -1119,36 +1230,43 @@ with tabs[3]:
     col1, col2 = st.columns([3, 1])
     with col1:
         cal_date = st.date_input("Дата", datetime.now())
-    with col2:
-        if st.button("📊 Показать месяц", use_container_width=True):
-            pass
     
     # События на выбранную дату
-    events = conn.execute("""SELECT * FROM content_calendar 
-                            WHERE date=? ORDER BY time""", 
-                         (cal_date,)).fetchall()
+    events = []
+    try:
+        events = conn.execute("""SELECT * FROM content_calendar 
+                                WHERE date=? ORDER BY time""", 
+                             (cal_date,)).fetchall()
+    except:
+        events = []
     
     if events:
         st.write(f"### События на {cal_date.strftime('%d.%m.%Y')}")
         for event in events:
+            event_dict = dict(event)
             with st.container():
                 col1, col2, col3 = st.columns([2, 2, 1])
                 with col1:
-                    st.write(f"**{event['topic'][:50]}**")
+                    st.write(f"**{event_dict.get('topic', '')[:50]}**")
                 with col2:
-                    st.write(f"🕐 {event['time']}")
-                    st.caption(event['description'][:100] if event['description'] else "")
+                    st.write(f"🕐 {event_dict.get('time', '')}")
+                    st.caption(event_dict.get('description', '')[:100] if event_dict.get('description') else "")
                 with col3:
                     status_options = ["planned", "in_progress", "completed", "cancelled"]
-                    current_status = event['status'] if event['status'] in status_options else "planned"
+                    current_status = event_dict.get('status', 'planned')
+                    if current_status not in status_options:
+                        current_status = "planned"
                     status = st.selectbox("Статус", 
                                         status_options,
                                         index=status_options.index(current_status),
-                                        key=f"status_{event['id']}")
+                                        key=f"status_{event_dict['id']}")
                     if status != current_status:
-                        conn.execute("UPDATE content_calendar SET status=? WHERE id=?",
-                                   (status, event['id']))
-                        conn.commit()
+                        try:
+                            conn.execute("UPDATE content_calendar SET status=? WHERE id=?",
+                                       (status, event_dict['id']))
+                            conn.commit()
+                        except:
+                            pass
                 st.write("---")
     else:
         st.info("Нет запланированных событий на эту дату")
@@ -1161,12 +1279,15 @@ with tabs[3]:
         ev_desc = st.text_area("Описание", key="ev_desc")
         
         if st.button("Добавить событие") and ev_topic:
-            conn.execute("""INSERT INTO content_calendar (date, time, topic, description) 
-                          VALUES (?, ?, ?, ?)""",
-                       (ev_date, ev_time, ev_topic, ev_desc))
-            conn.commit()
-            st.success("Событие добавлено")
-            st.rerun()
+            try:
+                conn.execute("""INSERT INTO content_calendar (date, time, topic, description) 
+                              VALUES (?, ?, ?, ?)""",
+                           (ev_date, ev_time, ev_topic, ev_desc))
+                conn.commit()
+                st.success("Событие добавлено")
+                st.rerun()
+            except:
+                st.error("Ошибка добавления события")
 
 # Вкладка аналитики
 with tabs[4]:
@@ -1175,9 +1296,16 @@ with tabs[4]:
     # Общая статистика
     col1, col2, col3, col4 = st.columns(4)
     
-    total_posts = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-    successful_posts = conn.execute("SELECT COUNT(*) FROM posts WHERE status LIKE '%Готово%'").fetchone()[0]
-    total_media = conn.execute("SELECT SUM(media_count) FROM posts").fetchone()[0] or 0
+    total_posts = 0
+    successful_posts = 0
+    total_media = 0
+    
+    try:
+        total_posts = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        successful_posts = conn.execute("SELECT COUNT(*) FROM posts WHERE status LIKE '%Готово%'").fetchone()[0]
+        total_media = conn.execute("SELECT SUM(media_count) FROM posts").fetchone()[0] or 0
+    except:
+        pass
     
     with col1:
         st.metric("Всего постов", total_posts)
@@ -1212,6 +1340,7 @@ with tabs[5]:
     st.subheader("🎬 Серии публикаций")
     
     # Существующие серии
+    series_list = []
     try:
         series_list = conn.execute("SELECT * FROM post_series ORDER BY created_at DESC").fetchall()
     except:
@@ -1219,39 +1348,48 @@ with tabs[5]:
     
     if series_list:
         for series in series_list:
-            with st.expander(f"📺 {series['name']} ({series.get('posts_count', 0)} постов)"):
-                st.write(f"**Описание:** {series.get('description', '')}")
-                st.write(f"**Интервал:** {series.get('interval_hours', 24)} часов")
-                st.write(f"**Создана:** {series.get('created_at', '')}")
+            series_dict = dict(series)
+            with st.expander(f"📺 {series_dict.get('name', '')} ({series_dict.get('posts_count', 0)} постов)"):
+                st.write(f"**Описание:** {series_dict.get('description', '')}")
+                st.write(f"**Интервал:** {series_dict.get('interval_hours', 24)} часов")
+                st.write(f"**Создана:** {series_dict.get('created_at', '')}")
                 
                 # Посты в серии
+                series_posts = []
                 try:
                     series_posts = conn.execute("""
                         SELECT * FROM series_posts 
                         WHERE series_id=? 
                         ORDER BY post_number
-                    """, (series['id'],)).fetchall()
-                    
-                    for post in series_posts:
-                        st.write(f"**Пост #{post['post_number']}**")
-                        st.text(post['text'][:200] + "...")
-                        st.write("---")
+                    """, (series_dict['id'],)).fetchall()
                 except:
-                    st.info("Нет постов в серии")
+                    pass
+                
+                for post in series_posts:
+                    post_dict = dict(post)
+                    st.write(f"**Пост #{post_dict.get('post_number', '')}**")
+                    st.text(post_dict.get('text', '')[:200] + "...")
+                    st.write("---")
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("📅 Запланировать", key=f"schedule_{series['id']}"):
-                        sched_date = st.date_input("Дата начала", key=f"sched_date_{series['id']}")
-                        sched_time = st.time_input("Время начала", key=f"sched_time_{series['id']}")
-                        if st.button("Подтвердить", key=f"confirm_{series['id']}"):
-                            schedule_series(series['id'], sched_date, sched_time)
+                    if st.button("📅 Запланировать", key=f"schedule_{series_dict['id']}"):
+                        sched_date = st.date_input("Дата начала", key=f"sched_date_{series_dict['id']}")
+                        sched_time = st.time_input("Время начала", key=f"sched_time_{series_dict['id']}")
+                        if st.button("Подтвердить", key=f"confirm_{series_dict['id']}"):
+                            try:
+                                schedule_series(series_dict['id'], sched_date, sched_time)
+                            except:
+                                st.error("Ошибка планирования")
                 with col2:
-                    if st.button("🗑 Удалить серию", key=f"del_series_{series['id']}"):
-                        conn.execute("DELETE FROM series_posts WHERE series_id=?", (series['id'],))
-                        conn.execute("DELETE FROM post_series WHERE id=?", (series['id'],))
-                        conn.commit()
-                        st.rerun()
+                    if st.button("🗑 Удалить серию", key=f"del_series_{series_dict['id']}"):
+                        try:
+                            conn.execute("DELETE FROM series_posts WHERE series_id=?", (series_dict['id'],))
+                            conn.execute("DELETE FROM post_series WHERE id=?", (series_dict['id'],))
+                            conn.commit()
+                            st.rerun()
+                        except:
+                            st.error("Ошибка удаления")
     else:
         st.info("Нет созданных серий")
     
@@ -1273,10 +1411,13 @@ with tabs[5]:
             series_posts_data.append({'text': post_text})
         
         if st.button("Создать серию") and series_name and all(p['text'] for p in series_posts_data):
-            series_id = create_post_series(series_name, series_desc, 
-                                          series_posts_data, series_interval)
-            st.success(f"Серия '{series_name}' создана!")
-            st.rerun()
+            try:
+                series_id = create_post_series(series_name, series_desc, 
+                                              series_posts_data, series_interval)
+                st.success(f"Серия '{series_name}' создана!")
+                st.rerun()
+            except:
+                st.error("Ошибка создания серии")
 
 # Вкладка медиатеки
 with tabs[6]:
@@ -1293,24 +1434,27 @@ with tabs[6]:
             lib_tags = st.text_input("Теги (через запятую)", key="lib_tags")
             
             if st.button("Загрузить в библиотеку"):
+                success_count = 0
                 for file in lib_files:
-                    file_path = os.path.join("uploads", file.name)
-                    with open(file_path, "wb") as f:
-                        f.write(file.getvalue())
-                    
                     try:
+                        file_path = os.path.join("uploads", file.name)
+                        with open(file_path, "wb") as f:
+                            f.write(file.getvalue())
+                        
                         conn.execute("""INSERT OR REPLACE INTO media_library 
                                       (filename, original_name, file_type, file_size, tags)
                                       VALUES (?, ?, ?, ?, ?)""",
                                    (file.name, file.name, file.type, 
                                     file.size, lib_tags))
+                        success_count += 1
                     except:
                         pass
                 conn.commit()
-                st.success(f"Загружено файлов: {len(lib_files)}")
+                st.success(f"Загружено файлов: {success_count}")
                 st.rerun()
     
     # Просмотр медиатеки
+    media_items = []
     try:
         media_items = conn.execute("""
             SELECT * FROM media_library 
@@ -1323,31 +1467,37 @@ with tabs[6]:
     if media_items:
         cols = st.columns(4)
         for i, item in enumerate(media_items):
+            item_dict = dict(item)
             with cols[i % 4]:
-                file_path = os.path.join("uploads", item['filename'])
+                file_path = os.path.join("uploads", item_dict.get('filename', ''))
                 if os.path.exists(file_path):
-                    if item['file_type'].startswith('image/'):
-                        st.image(file_path, caption=item['original_name'], 
+                    file_type = item_dict.get('file_type', '')
+                    if file_type.startswith('image/'):
+                        st.image(file_path, caption=item_dict.get('original_name', ''), 
                                use_container_width=True)
-                    elif item['file_type'].startswith('video/'):
+                    elif file_type.startswith('video/'):
                         st.video(file_path)
                 
-                st.caption(f"📅 {item['uploaded_at'][:10] if item['uploaded_at'] else ''}")
-                if item['tags']:
-                    st.caption(f"🏷 {item['tags']}")
+                uploaded_at = item_dict.get('uploaded_at', '')
+                st.caption(f"📅 {uploaded_at[:10] if uploaded_at else ''}")
+                if item_dict.get('tags'):
+                    st.caption(f"🏷 {item_dict['tags']}")
                 
                 col_use, col_del = st.columns(2)
                 with col_use:
-                    if st.button("📝", key=f"use_media_{item['id']}"):
+                    if st.button("📝", key=f"use_media_{item_dict['id']}"):
                         st.info("Файл добавлен в редактор")
                 with col_del:
-                    if st.button("🗑", key=f"del_media_{item['id']}"):
-                        if os.path.exists(file_path):
-                            os.remove(file_path)
-                        conn.execute("DELETE FROM media_library WHERE id=?", 
-                                   (item['id'],))
-                        conn.commit()
-                        st.rerun()
+                    if st.button("🗑", key=f"del_media_{item_dict['id']}"):
+                        try:
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                            conn.execute("DELETE FROM media_library WHERE id=?", 
+                                       (item_dict['id'],))
+                            conn.commit()
+                            st.rerun()
+                        except:
+                            st.error("Ошибка удаления")
     else:
         st.info("Медиатека пуста. Загрузите файлы для начала работы.")
 
@@ -1386,6 +1536,7 @@ with tabs[7]:
     
     query += " ORDER BY scheduled_time DESC LIMIT 50"
     
+    posts = []
     try:
         posts = conn.execute(query, params).fetchall()
     except:
@@ -1395,39 +1546,46 @@ with tabs[7]:
         st.write(f"Найдено постов: {len(posts)}")
         
         for post in posts:
-            with st.expander(f"{post['id']} - {post['status']} | {post['scheduled_time']}"):
-                st.write(f"**Текст:** {post['text']}")
+            post_dict = dict(post)
+            with st.expander(f"{post_dict['id']} - {post_dict.get('status', '')} | {post_dict.get('scheduled_time', '')}"):
+                st.write(f"**Текст:** {post_dict.get('text', '')}")
                 
-                if post['full_text']:
+                if post_dict.get('full_text'):
                     with st.expander("Полный текст"):
-                        st.write(post['full_text'])
+                        st.write(post_dict['full_text'])
                 
-                st.write(f"**Платформы:** {post['platforms']}")
+                st.write(f"**Платформы:** {post_dict.get('platforms', '')}")
                 
                 # Действия
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    if st.button("📝 Повторить", key=f"repeat_{post['id']}"):
-                        if post['full_text']:
-                            st.session_state.draft = post['full_text']
+                    if st.button("📝 Повторить", key=f"repeat_{post_dict['id']}"):
+                        if post_dict.get('full_text'):
+                            st.session_state.draft = post_dict['full_text']
                             st.rerun()
                 with col2:
-                    if st.button("📊 Обновить аналитику", key=f"update_analytics_{post['id']}"):
+                    if st.button("📊 Обновить аналитику", key=f"update_analytics_{post_dict['id']}"):
                         st.info("Аналитика обновлена")
                 with col3:
-                    if st.button("🗑 Удалить", key=f"del_post_{post['id']}"):
-                        conn.execute("DELETE FROM posts WHERE id=?", (post['id'],))
-                        conn.execute("DELETE FROM analytics WHERE post_id=?", (post['id'],))
-                        conn.commit()
-                        st.rerun()
+                    if st.button("🗑 Удалить", key=f"del_post_{post_dict['id']}"):
+                        try:
+                            conn.execute("DELETE FROM posts WHERE id=?", (post_dict['id'],))
+                            conn.execute("DELETE FROM analytics WHERE post_id=?", (post_dict['id'],))
+                            conn.commit()
+                            st.rerun()
+                        except:
+                            st.error("Ошибка удаления")
     else:
         st.info("Нет публикаций по заданным критериям")
     
     # Экспорт истории
     if st.button("📥 Экспорт истории в CSV"):
-        all_posts = export_posts_to_csv()
-        csv = all_posts.to_csv(index=False)
-        st.download_button("Скачать CSV", csv, "posts_history.csv", "text/csv")
+        try:
+            all_posts = export_posts_to_csv()
+            csv = all_posts.to_csv(index=False)
+            st.download_button("Скачать CSV", csv, "posts_history.csv", "text/csv")
+        except:
+            st.error("Ошибка экспорта")
 
 conn.close()
 
