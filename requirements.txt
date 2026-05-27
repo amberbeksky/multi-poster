@@ -2,3 +2,4 @@ streamlit
 vk_api
 pyTelegramBotAPI
 pandas
+apscheduler
