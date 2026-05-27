@@ -3,3 +3,4 @@ vk_api
 pyTelegramBotAPI
 pandas
 apscheduler
+feedparser
