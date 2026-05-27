@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import vk_api
 import telebot
 from telebot.types import InputMediaPhoto
@@ -14,6 +15,25 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # 1. БАЗОВАЯ НАСТРОЙКА И ИНИЦИАЛИЗАЦИЯ
 # ==========================================
 st.set_page_config(page_title="Multi-Poster GOD MODE", layout="wide", page_icon="⚡")
+
+# ==========================================
+# 1.5 ИНТЕГРАЦИЯ С TELEGRAM WEB APP
+# ==========================================
+components.html(
+    """
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            if (window.Telegram && window.Telegram.WebApp) {
+                window.Telegram.WebApp.ready();
+                window.Telegram.WebApp.expand();
+            }
+        });
+    </script>
+    """,
+    height=0,
+    width=0
+)
 
 if not os.path.exists("uploads"):
     os.makedirs("uploads")
@@ -103,7 +123,6 @@ if not st.session_state.authenticated:
             else:
                 st.error("❌ Неверный пароль!")
     
-    # Останавливаем выполнение остального кода, пока не будет входа
     st.stop()
 
 # ==========================================
