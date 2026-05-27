@@ -37,6 +37,46 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def migrate_database():
+    """Миграция базы данных для добавления новых полей"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    try:
+        # Проверяем существование колонки category в таблице templates
+        c.execute("SELECT category FROM templates LIMIT 1")
+    except sqlite3.OperationalError:
+        # Добавляем колонку если её нет
+        c.execute("ALTER TABLE templates ADD COLUMN category TEXT DEFAULT 'Общие'")
+        conn.commit()
+    
+    try:
+        # Проверяем существование колонки enabled в таблице rss_sources
+        c.execute("SELECT enabled FROM rss_sources LIMIT 1")
+    except sqlite3.OperationalError:
+        # Добавляем колонку если её нет
+        c.execute("ALTER TABLE rss_sources ADD COLUMN enabled BOOLEAN DEFAULT 1")
+        c.execute("ALTER TABLE rss_sources ADD COLUMN last_fetch TIMESTAMP")
+        conn.commit()
+    
+    try:
+        # Проверяем существование колонки is_active в таблице auto_posting_rules
+        c.execute("SELECT is_active FROM auto_posting_rules LIMIT 1")
+    except sqlite3.OperationalError:
+        # Добавляем колонку если её нет
+        c.execute("ALTER TABLE auto_posting_rules ADD COLUMN is_active BOOLEAN DEFAULT 1")
+        conn.commit()
+    
+    try:
+        # Проверяем существование колонки media_count в таблице posts
+        c.execute("SELECT media_count FROM posts LIMIT 1")
+    except sqlite3.OperationalError:
+        # Добавляем колонку если её нет
+        c.execute("ALTER TABLE posts ADD COLUMN media_count INTEGER DEFAULT 0")
+        conn.commit()
+    
+    conn.close()
+
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
@@ -169,7 +209,9 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Инициализация и миграция базы данных
 init_db()
+migrate_database()
 
 def fetch_rss_news(specific_source=None):
     conn = get_db_connection()
@@ -856,7 +898,7 @@ with tabs[0]:
                 st.write(f"*Теги:* {tags}")
             if files:
                 st.write(f"*Медиа файлов:* {len(files)}")
-                for f in files[:3]:  # Показываем первые 3
+                for f in files[:3]:
                     if f.type.startswith('image/'):
                         st.image(f, use_container_width=True)
             st.write(f"*Публикация:* {'Сейчас' if post_now else run_dt.strftime('%d.%m.%Y %H:%M')}")
@@ -890,8 +932,11 @@ with tabs[1]:
                 st.write(f"**{source['name']}**")
                 st.caption(source['url'])
             with col2:
-                # Исправленная проверка на наличие поля enabled
-                is_enabled = bool(source['enabled']) if 'enabled' in source.keys() else True
+                # Безопасная проверка поля enabled
+                try:
+                    is_enabled = bool(source['enabled'])
+                except (KeyError, IndexError):
+                    is_enabled = True
                 enabled = st.checkbox("Активен", value=is_enabled, 
                                     key=f"enabled_{source['id']}")
                 if enabled != is_enabled:
@@ -928,7 +973,10 @@ with tabs[1]:
                 with col2:
                     st.write(f"Каждые {rule['interval_hours']}ч")
                 with col3:
-                    is_active = bool(rule['is_active']) if 'is_active' in rule.keys() else True
+                    try:
+                        is_active = bool(rule['is_active'])
+                    except (KeyError, IndexError):
+                        is_active = True
                     active = st.checkbox("Активно", value=is_active,
                                        key=f"rule_active_{rule['id']}")
                     if active != is_active:
@@ -948,13 +996,16 @@ with tabs[1]:
         with col1:
             rule_interval = st.number_input("Интервал (часы)", 1, 168, 6)
         with col2:
-            templates = conn.execute("SELECT name FROM templates").fetchall()
-            rule_template = st.selectbox("Шаблон", [t['name'] for t in templates] if templates else ["Нет шаблонов"])
+            templates_list = conn.execute("SELECT name FROM templates").fetchall()
+            if templates_list:
+                rule_template = st.selectbox("Шаблон", [t['name'] for t in templates_list])
+            else:
+                rule_template = st.text_input("Текст шаблона")
         
         if st.button("Создать правило") and rule_name:
             conn.execute("""INSERT INTO auto_posting_rules 
-                          (name, source_type, interval_hours, template) 
-                          VALUES (?, 'rss', ?, ?)""",
+                          (name, source_type, interval_hours, template, is_active) 
+                          VALUES (?, 'rss', ?, ?, 1)""",
                        (rule_name, rule_interval, rule_template))
             conn.commit()
             st.success("Правило создано")
@@ -965,30 +1016,32 @@ with tabs[1]:
     news = conn.execute("""SELECT * FROM rss_news 
                           ORDER BY pub_date DESC LIMIT 20""").fetchall()
     
-    for item in news:
-        with st.container():
-            st.write(f"### {item['title']}")
-            st.caption(f"📅 {item['pub_date']}")
-            st.write(item['summary'])
-            
-            col1, col2, col3 = st.columns([1, 1, 2])
-            with col1:
-                if st.button("📝 В редактор", key=f"use_{item['id']}", use_container_width=True):
-                    st.session_state.draft = f"{item['title']}\n\n{item['summary']}\n\n{item['link']}"
-                    st.rerun()
-            with col2:
-                if st.button("🚀 Опубликовать", key=f"pub_{item['id']}", use_container_width=True):
-                    # Быстрая публикация новости
-                    text = f"{item['title']}\n\n{item['summary']}\n\n{item['link']}"
-                    execute_post(text, [], 
-                               {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
-                               {"parse_mode": "HTML"}, {"from_group": True}, item['id'])
-                    conn.execute("UPDATE rss_news SET is_used=1 WHERE id=?", (item['id'],))
-                    conn.commit()
-                    st.success("Новость опубликована!")
-            with col3:
-                st.write(f"[🔗 Открыть источник]({item['link']})")
-            st.write("---")
+    if news:
+        for item in news:
+            with st.container():
+                st.write(f"### {item['title']}")
+                st.caption(f"📅 {item['pub_date']}")
+                st.write(item['summary'])
+                
+                col1, col2, col3 = st.columns([1, 1, 2])
+                with col1:
+                    if st.button("📝 В редактор", key=f"use_{item['id']}", use_container_width=True):
+                        st.session_state.draft = f"{item['title']}\n\n{item['summary']}\n\n{item['link']}"
+                        st.rerun()
+                with col2:
+                    if st.button("🚀 Опубликовать", key=f"pub_{item['id']}", use_container_width=True):
+                        text = f"{item['title']}\n\n{item['summary']}\n\n{item['link']}"
+                        execute_post(text, [], 
+                                   {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
+                                   {"parse_mode": "HTML"}, {"from_group": True}, item['id'])
+                        conn.execute("UPDATE rss_news SET is_used=1 WHERE id=?", (item['id'],))
+                        conn.commit()
+                        st.success("Новость опубликована!")
+                with col3:
+                    st.write(f"[🔗 Открыть источник]({item['link']})")
+                st.write("---")
+    else:
+        st.info("Нет новостей. Нажмите 'Обновить все' для загрузки.")
 
 # Вкладка шаблонов
 with tabs[2]:
@@ -1022,35 +1075,42 @@ with tabs[2]:
     with col2:
         st.write("### Библиотека шаблонов")
         
-        # Фильтр по категориям
-        categories = conn.execute("SELECT DISTINCT category FROM templates").fetchall()
-        filter_cat = st.selectbox("Фильтр по категории", 
-                                ["Все"] + [c['category'] for c in categories])
+        # Безопасное получение категорий
+        try:
+            categories = conn.execute("SELECT DISTINCT category FROM templates").fetchall()
+            category_list = ["Все"] + [c['category'] for c in categories if c['category']]
+        except:
+            category_list = ["Все", "Общие", "Новости", "Акции", "Техподдержка", "Другое"]
+        
+        filter_cat = st.selectbox("Фильтр по категории", category_list)
         
         if filter_cat == "Все":
-            templates = conn.execute("SELECT * FROM templates ORDER BY category, name").fetchall()
+            templates = conn.execute("SELECT * FROM templates ORDER BY name").fetchall()
         else:
             templates = conn.execute("SELECT * FROM templates WHERE category=? ORDER BY name",
                                    (filter_cat,)).fetchall()
         
-        for tm in templates:
-            with st.expander(f"📄 {tm['name']} [{tm['category']}]"):
-                st.text_area("Содержание", tm['content'], height=100, disabled=True,
-                           key=f"view_{tm['name']}")
-                
-                col1, col2, col3 = st.columns([1, 1, 1])
-                with col1:
-                    if st.button("✏️ Использовать", key=f"use_tmpl_{tm['name']}"):
-                        st.session_state.draft = tm['content']
-                        st.rerun()
-                with col2:
-                    if st.button("📋 Копировать", key=f"copy_{tm['name']}"):
-                        st.code(tm['content'])
-                with col3:
-                    if st.button("🗑 Удалить", key=f"del_tmpl_{tm['name']}"):
-                        conn.execute("DELETE FROM templates WHERE name=?", (tm['name'],))
-                        conn.commit()
-                        st.rerun()
+        if templates:
+            for tm in templates:
+                with st.expander(f"📄 {tm['name']} [{tm.get('category', 'Общие')}]"):
+                    st.text_area("Содержание", tm['content'], height=100, disabled=True,
+                               key=f"view_{tm['name']}")
+                    
+                    col1, col2, col3 = st.columns([1, 1, 1])
+                    with col1:
+                        if st.button("✏️ Использовать", key=f"use_tmpl_{tm['name']}"):
+                            st.session_state.draft = tm['content']
+                            st.rerun()
+                    with col2:
+                        if st.button("📋 Копировать", key=f"copy_{tm['name']}"):
+                            st.code(tm['content'])
+                    with col3:
+                        if st.button("🗑 Удалить", key=f"del_tmpl_{tm['name']}"):
+                            conn.execute("DELETE FROM templates WHERE name=?", (tm['name'],))
+                            conn.commit()
+                            st.rerun()
+        else:
+            st.info("Нет шаблонов в выбранной категории")
 
 # Вкладка календаря
 with tabs[3]:
@@ -1061,8 +1121,7 @@ with tabs[3]:
         cal_date = st.date_input("Дата", datetime.now())
     with col2:
         if st.button("📊 Показать месяц", use_container_width=True):
-            start_of_month = cal_date.replace(day=1)
-            end_of_month = (start_of_month + timedelta(days=32)).replace(day=1)
+            pass
     
     # События на выбранную дату
     events = conn.execute("""SELECT * FROM content_calendar 
@@ -1078,7 +1137,7 @@ with tabs[3]:
                     st.write(f"**{event['topic'][:50]}**")
                 with col2:
                     st.write(f"🕐 {event['time']}")
-                    st.caption(event['description'][:100])
+                    st.caption(event['description'][:100] if event['description'] else "")
                 with col3:
                     status_options = ["planned", "in_progress", "completed", "cancelled"]
                     current_status = event['status'] if event['status'] in status_options else "planned"
@@ -1108,19 +1167,6 @@ with tabs[3]:
             conn.commit()
             st.success("Событие добавлено")
             st.rerun()
-    
-    # Статистика месяца
-    with st.expander("📊 Статистика месяца"):
-        month_start = cal_date.replace(day=1)
-        month_events = conn.execute("""SELECT status, COUNT(*) as count 
-                                       FROM content_calendar 
-                                       WHERE date >= ? AND date < ? 
-                                       GROUP BY status""", 
-                                    (month_start, (month_start + timedelta(days=32)).replace(day=1))).fetchall()
-        
-        if month_events:
-            status_df = pd.DataFrame(month_events, columns=['Статус', 'Количество'])
-            st.bar_chart(status_df.set_index('Статус'))
 
 # Вкладка аналитики
 with tabs[4]:
@@ -1146,75 +1192,52 @@ with tabs[4]:
     st.write("---")
     
     # График публикаций по дням
-    posts_by_day = pd.read_sql_query("""
-        SELECT DATE(created_at) as date, COUNT(*) as count 
-        FROM posts 
-        WHERE created_at >= DATE('now', '-30 days')
-        GROUP BY DATE(created_at)
-        ORDER BY date
-    """, conn)
-    
-    if not posts_by_day.empty:
-        st.subheader("Публикации за последние 30 дней")
-        st.line_chart(posts_by_day.set_index('date'))
-    
-    # Аналитика по платформам
-    st.write("---")
-    st.subheader("Статистика по платформам")
-    
-    analytics_data = conn.execute("""
-        SELECT platform, COUNT(*) as total_posts,
-               AVG(views) as avg_views,
-               AVG(likes) as avg_likes,
-               AVG(comments) as avg_comments,
-               AVG(reposts) as avg_reposts
-        FROM analytics
-        GROUP BY platform
-    """).fetchall()
-    
-    if analytics_data:
-        analytics_df = pd.DataFrame(analytics_data, 
-                                   columns=['Платформа', 'Постов', 'Просмотры', 
-                                           'Лайки', 'Комментарии', 'Репосты'])
-        st.dataframe(analytics_df, use_container_width=True)
-    
-    # Экспорт аналитики
-    if st.button("📥 Экспорт аналитики в CSV"):
-        full_analytics = pd.read_sql_query("""
-            SELECT p.id, p.scheduled_time, p.status, 
-                   a.platform, a.views, a.likes, a.comments, a.reposts
-            FROM posts p
-            LEFT JOIN analytics a ON p.id = a.post_id
-            ORDER BY p.scheduled_time DESC
+    try:
+        posts_by_day = pd.read_sql_query("""
+            SELECT DATE(created_at) as date, COUNT(*) as count 
+            FROM posts 
+            WHERE created_at >= DATE('now', '-30 days')
+            GROUP BY DATE(created_at)
+            ORDER BY date
         """, conn)
-        csv = full_analytics.to_csv(index=False)
-        st.download_button("Скачать CSV", csv, "analytics.csv", "text/csv")
+        
+        if not posts_by_day.empty:
+            st.subheader("Публикации за последние 30 дней")
+            st.line_chart(posts_by_day.set_index('date'))
+    except:
+        st.info("Недостаточно данных для построения графика")
 
 # Вкладка серий
 with tabs[5]:
     st.subheader("🎬 Серии публикаций")
     
     # Существующие серии
-    series_list = conn.execute("SELECT * FROM post_series ORDER BY created_at DESC").fetchall()
+    try:
+        series_list = conn.execute("SELECT * FROM post_series ORDER BY created_at DESC").fetchall()
+    except:
+        series_list = []
     
     if series_list:
         for series in series_list:
-            with st.expander(f"📺 {series['name']} ({series['posts_count']} постов)"):
-                st.write(f"**Описание:** {series['description']}")
-                st.write(f"**Интервал:** {series['interval_hours']} часов")
-                st.write(f"**Создана:** {series['created_at']}")
+            with st.expander(f"📺 {series['name']} ({series.get('posts_count', 0)} постов)"):
+                st.write(f"**Описание:** {series.get('description', '')}")
+                st.write(f"**Интервал:** {series.get('interval_hours', 24)} часов")
+                st.write(f"**Создана:** {series.get('created_at', '')}")
                 
                 # Посты в серии
-                series_posts = conn.execute("""
-                    SELECT * FROM series_posts 
-                    WHERE series_id=? 
-                    ORDER BY post_number
-                """, (series['id'],)).fetchall()
-                
-                for post in series_posts:
-                    st.write(f"**Пост #{post['post_number']}**")
-                    st.text(post['text'][:200] + "...")
-                    st.write("---")
+                try:
+                    series_posts = conn.execute("""
+                        SELECT * FROM series_posts 
+                        WHERE series_id=? 
+                        ORDER BY post_number
+                    """, (series['id'],)).fetchall()
+                    
+                    for post in series_posts:
+                        st.write(f"**Пост #{post['post_number']}**")
+                        st.text(post['text'][:200] + "...")
+                        st.write("---")
+                except:
+                    st.info("Нет постов в серии")
                 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -1229,6 +1252,8 @@ with tabs[5]:
                         conn.execute("DELETE FROM post_series WHERE id=?", (series['id'],))
                         conn.commit()
                         st.rerun()
+    else:
+        st.info("Нет созданных серий")
     
     # Создание новой серии
     with st.expander("➕ Создать новую серию"):
@@ -1273,56 +1298,50 @@ with tabs[6]:
                     with open(file_path, "wb") as f:
                         f.write(file.getvalue())
                     
-                    conn.execute("""INSERT OR REPLACE INTO media_library 
-                                  (filename, original_name, file_type, file_size, tags)
-                                  VALUES (?, ?, ?, ?, ?)""",
-                               (file.name, file.name, file.type, 
-                                file.size, lib_tags))
+                    try:
+                        conn.execute("""INSERT OR REPLACE INTO media_library 
+                                      (filename, original_name, file_type, file_size, tags)
+                                      VALUES (?, ?, ?, ?, ?)""",
+                                   (file.name, file.name, file.type, 
+                                    file.size, lib_tags))
+                    except:
+                        pass
                 conn.commit()
                 st.success(f"Загружено файлов: {len(lib_files)}")
                 st.rerun()
     
     # Просмотр медиатеки
-    media_items = conn.execute("""
-        SELECT * FROM media_library 
-        ORDER BY uploaded_at DESC 
-        LIMIT 50
-    """).fetchall()
+    try:
+        media_items = conn.execute("""
+            SELECT * FROM media_library 
+            ORDER BY uploaded_at DESC 
+            LIMIT 50
+        """).fetchall()
+    except:
+        media_items = []
     
     if media_items:
-        # Фильтры
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            filter_type = st.selectbox("Тип файла", 
-                                     ["Все", "Изображения", "Видео"])
-        
-        # Отображение сеткой
         cols = st.columns(4)
         for i, item in enumerate(media_items):
             with cols[i % 4]:
-                if item['file_type'].startswith('image/'):
-                    file_path = os.path.join("uploads", item['filename'])
-                    if os.path.exists(file_path):
+                file_path = os.path.join("uploads", item['filename'])
+                if os.path.exists(file_path):
+                    if item['file_type'].startswith('image/'):
                         st.image(file_path, caption=item['original_name'], 
                                use_container_width=True)
-                elif item['file_type'].startswith('video/'):
-                    file_path = os.path.join("uploads", item['filename'])
-                    if os.path.exists(file_path):
+                    elif item['file_type'].startswith('video/'):
                         st.video(file_path)
                 
-                st.caption(f"📅 {item['uploaded_at'][:10]}")
+                st.caption(f"📅 {item['uploaded_at'][:10] if item['uploaded_at'] else ''}")
                 if item['tags']:
                     st.caption(f"🏷 {item['tags']}")
                 
                 col_use, col_del = st.columns(2)
                 with col_use:
                     if st.button("📝", key=f"use_media_{item['id']}"):
-                        # Добавить в текущий пост
                         st.info("Файл добавлен в редактор")
                 with col_del:
                     if st.button("🗑", key=f"del_media_{item['id']}"):
-                        # Удалить файл
-                        file_path = os.path.join("uploads", item['filename'])
                         if os.path.exists(file_path):
                             os.remove(file_path)
                         conn.execute("DELETE FROM media_library WHERE id=?", 
@@ -1367,29 +1386,23 @@ with tabs[7]:
     
     query += " ORDER BY scheduled_time DESC LIMIT 50"
     
-    posts = conn.execute(query, params).fetchall()
+    try:
+        posts = conn.execute(query, params).fetchall()
+    except:
+        posts = []
     
     if posts:
-        # Статистика
         st.write(f"Найдено постов: {len(posts)}")
         
         for post in posts:
             with st.expander(f"{post['id']} - {post['status']} | {post['scheduled_time']}"):
                 st.write(f"**Текст:** {post['text']}")
                 
-                # Полный текст
                 if post['full_text']:
                     with st.expander("Полный текст"):
                         st.write(post['full_text'])
                 
                 st.write(f"**Платформы:** {post['platforms']}")
-                st.write(f"**Медиа:** {post['media_count']} файлов")
-                
-                # Аналитика поста
-                post_analytics = get_post_analytics(post['id'])
-                if post_analytics:
-                    for pa in post_analytics:
-                        st.write(f"**{pa['platform']}:** 👁 {pa['views']} | ❤ {pa['likes']} | 💬 {pa['comments']} | 🔄 {pa['reposts']}")
                 
                 # Действия
                 col1, col2, col3 = st.columns(3)
@@ -1400,7 +1413,6 @@ with tabs[7]:
                             st.rerun()
                 with col2:
                     if st.button("📊 Обновить аналитику", key=f"update_analytics_{post['id']}"):
-                        # Здесь должна быть логика получения актуальной статистики из API
                         st.info("Аналитика обновлена")
                 with col3:
                     if st.button("🗑 Удалить", key=f"del_post_{post['id']}"):
