@@ -7,6 +7,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import re
+import hashlib
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # ==========================================
@@ -14,20 +15,19 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # ==========================================
 st.set_page_config(page_title="Multi-Poster GOD MODE", layout="wide", page_icon="⚡")
 
-# Создаем папку для файлов
 if not os.path.exists("uploads"):
     os.makedirs("uploads")
 
-# Подключение к БД
 def get_db_connection():
     conn = sqlite3.connect("smm_panel.db", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
-# Инициализация таблиц
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS admin 
+                 (id INTEGER PRIMARY KEY, password_hash TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS profiles 
                  (name TEXT PRIMARY KEY, tg_token TEXT, tg_chat TEXT, vk_token TEXT, vk_chat TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS posts 
@@ -35,12 +35,10 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS templates 
                  (name TEXT PRIMARY KEY, content TEXT)''')
     
-    # Базовый профиль
     c.execute("SELECT COUNT(*) FROM profiles")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO profiles VALUES ('Основной', '', '', '', '')")
     
-    # Базовые шаблоны
     c.execute("SELECT COUNT(*) FROM templates")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO templates VALUES ('IT Услуги', 'Ремонт ПК, настройка ПО.\\n#услуги')")
@@ -50,7 +48,6 @@ def init_db():
 
 init_db()
 
-# Запуск фонового планировщика
 @st.cache_resource
 def init_scheduler():
     scheduler = BackgroundScheduler()
@@ -59,12 +56,58 @@ def init_scheduler():
 
 scheduler = init_scheduler()
 
-# Черновик в сессии
 if 'draft' not in st.session_state:
     st.session_state.draft = ""
 
 # ==========================================
-# 2. ФОНОВЫЙ ДВИЖОК ОТПРАВКИ
+# 2. СИСТЕМА АВТОРИЗАЦИИ (ВХОД)
+# ==========================================
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+conn = get_db_connection()
+c = conn.cursor()
+c.execute("SELECT password_hash FROM admin WHERE id=1")
+admin_row = c.fetchone()
+conn.close()
+
+if not st.session_state.authenticated:
+    st.title("🔒 Панель управления")
+    
+    if not admin_row:
+        st.info("Добро пожаловать! Это первый запуск. Задайте Мастер-пароль для защиты панели.")
+        new_pass = st.text_input("Придумайте пароль", type="password")
+        new_pass_confirm = st.text_input("Повторите пароль", type="password")
+        
+        if st.button("Сохранить и войти"):
+            if new_pass and new_pass == new_pass_confirm:
+                pwd_hash = hash_password(new_pass)
+                conn = get_db_connection()
+                conn.execute("INSERT INTO admin (id, password_hash) VALUES (1, ?)", (pwd_hash,))
+                conn.commit()
+                conn.close()
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Пароли не совпадают или пусто!")
+    else:
+        st.write("Введите Мастер-пароль для доступа.")
+        pwd_input = st.text_input("Пароль", type="password")
+        if st.button("Войти"):
+            if hash_password(pwd_input) == admin_row['password_hash']:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("❌ Неверный пароль!")
+    
+    # Останавливаем выполнение остального кода, пока не будет входа
+    st.stop()
+
+# ==========================================
+# 3. ФОНОВЫЙ ДВИЖОК ОТПРАВКИ
 # ==========================================
 def execute_post(text, media_paths, profile_data, tg_opts, vk_opts, post_id):
     success_platforms = []
@@ -142,15 +185,21 @@ def execute_post(text, media_paths, profile_data, tg_opts, vk_opts, post_id):
             os.remove(path)
 
 # ==========================================
-# 3. ПОЛЬЗОВАТЕЛЬСКИЙ ИНТЕРФЕЙС
+# 4. ПОЛЬЗОВАТЕЛЬСКИЙ ИНТЕРФЕЙС (ЗАЩИЩЕНО)
 # ==========================================
 st.title("⚡ Multi-Poster GOD MODE")
-st.write("SQLite, Фоновый постинг, Мультиаккаунты, SEO-анализ и UTM.")
+st.write("Сверхмощный SMM-комбайн: Мультиаккаунты, SEO-анализ, UTM-метки, Шаблоны и Защита.")
 
 conn = get_db_connection()
 
-# БОКОВАЯ ПАНЕЛЬ (Профили и Настройки)
+# БОКОВАЯ ПАНЕЛЬ
 with st.sidebar:
+    if st.button("🚪 Выйти из панели"):
+        st.session_state.authenticated = False
+        st.rerun()
+        
+    st.divider()
+    
     st.header("🗂 Профили API")
     profiles_list = [dict(row) for row in conn.execute("SELECT * FROM profiles").fetchall()]
     profile_names = [p['name'] for p in profiles_list]
@@ -189,6 +238,9 @@ with st.sidebar:
     st.header("⚙️ ВКонтакте Опции")
     vk_fg = st.checkbox("Пост от имени группы", value=True)
     vk_cc = st.checkbox("Закрыть комментарии")
+    
+    st.divider()
+    st.caption("Авторизованный доступ. Zelenkov Danil Vadimovich, junior DBA")
 
 # РАБОЧИЕ ВКЛАДКИ
 tab_editor, tab_seo, tab_templates, tab_queue, tab_history = st.tabs([
@@ -296,7 +348,7 @@ with tab_history:
     st.download_button("💾 Экспорт в CSV", data=csv, file_name="smm_full_log.csv", mime="text/csv")
 
 # ==========================================
-# 4. ЛОГИКА ОТПРАВКИ
+# 5. ЛОГИКА ОТПРАВКИ
 # ==========================================
 final_text = post_text
 if hashtags:
@@ -306,7 +358,6 @@ if submit_btn:
     if not final_text.strip() and not uploaded_files:
         st.error("Пост пуст!")
     else:
-        # Сохранение файлов локально для планировщика
         saved_media = []
         if uploaded_files:
             for file in uploaded_files:
@@ -315,12 +366,10 @@ if submit_btn:
                     f.write(file.getvalue())
                 saved_media.append(f_path)
 
-        # Сборка настроек
         profile_dict = {"tg_token": tg_token, "tg_chat": tg_chat, "vk_token": vk_token, "vk_chat": vk_chat}
         tg_options = {"parse_mode": tg_pm, "silent": tg_sil, "protect": tg_prot, "no_preview": tg_noprev}
         vk_options = {"from_group": vk_fg, "close_comments": vk_cc}
         
-        # Запись в БД
         status = "⏳ В очереди" if is_scheduled else "🔄 Обработка"
         c = conn.cursor()
         c.execute("INSERT INTO posts (scheduled_time, text, platforms, status) VALUES (?, ?, ?, ?)",
@@ -328,7 +377,6 @@ if submit_btn:
         post_id = c.lastrowid
         conn.commit()
 
-        # Отправка задачи в APScheduler
         scheduler.add_job(
             execute_post,
             trigger='date',
