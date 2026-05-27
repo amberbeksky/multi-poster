@@ -140,7 +140,7 @@ def init_db():
     
     # Инициализация начальных данных
     if c.execute("SELECT COUNT(*) FROM profiles").fetchone()[0] == 0:
-        c.execute("INSERT INTO profiles VALUES ('Основной', '', '', '', '', CURRENT_TIMESTAMP)")
+        c.execute("INSERT INTO profiles (name, tg_token, tg_chat, vk_token, vk_chat) VALUES ('Основной', '', '', '', '')")
     
     if c.execute("SELECT COUNT(*) FROM rss_sources").fetchone()[0] == 0:
         sources = [
@@ -151,7 +151,7 @@ def init_db():
             ('https://3dnews.ru/news/rss/', '3DNews')
         ]
         for url, name in sources:
-            c.execute("INSERT INTO rss_sources (url, name) VALUES (?, ?)", (url, name))
+            c.execute("INSERT INTO rss_sources (url, name, enabled) VALUES (?, ?, 1)", (url, name))
     
     # Начальные хэштеги
     if c.execute("SELECT COUNT(*) FROM hashtags").fetchone()[0] == 0:
@@ -209,10 +209,10 @@ def execute_post(text, media_paths, profile_data, tg_opts, vk_opts, post_id):
     analytics_data = {}
     
     # Telegram отправка
-    if profile_data['tg_token'] and profile_data['tg_chat']:
+    if profile_data.get('tg_token') and profile_data.get('tg_chat'):
         try:
             bot = telebot.TeleBot(profile_data['tg_token'])
-            parse_mode = None if tg_opts['parse_mode'] == "Отключено" else tg_opts['parse_mode']
+            parse_mode = None if tg_opts.get('parse_mode') == "Отключено" else tg_opts.get('parse_mode')
             
             if not media_paths:
                 msg = bot.send_message(profile_data['tg_chat'], text, 
@@ -255,7 +255,7 @@ def execute_post(text, media_paths, profile_data, tg_opts, vk_opts, post_id):
             print(f"TG Error: {str(e)}")
     
     # VK отправка
-    if profile_data['vk_token'] and profile_data['vk_chat']:
+    if profile_data.get('vk_token') and profile_data.get('vk_chat'):
         try:
             vk_session = vk_api.VkApi(token=profile_data['vk_token'])
             vk = vk_session.get_api()
@@ -276,8 +276,7 @@ def execute_post(text, media_paths, profile_data, tg_opts, vk_opts, post_id):
                 owner_id=-int(profile_data['vk_chat']),
                 message=text,
                 attachments=",".join(attachments),
-                from_group=1 if vk_opts['from_group'] else 0,
-                copyright=profile_data.get('vk_copyright')
+                from_group=1 if vk_opts.get('from_group') else 0
             )
             
             success_platforms.append("VK")
@@ -464,7 +463,7 @@ def schedule_series(series_id, start_date, start_time):
                 args=[
                     post['text'],
                     media_files,
-                    {"tg_token": "", "tg_chat": "", "vk_token": "", "vk_chat": ""},  # Будут взяты активные
+                    {"tg_token": "", "tg_chat": "", "vk_token": "", "vk_chat": ""},
                     {"parse_mode": "HTML"},
                     {"from_group": True},
                     post['id']
@@ -730,6 +729,9 @@ with tabs[0]:
                                 accept_multiple_files=True,
                                 type=['png', 'jpg', 'jpeg', 'gif', 'mp4', 'avi'])
         
+        compress_images = False
+        max_img_size = 2
+        
         if files:
             st.write(f"Загружено файлов: {len(files)}")
             
@@ -745,9 +747,11 @@ with tabs[0]:
         with col1:
             post_now = st.checkbox("Опубликовать сейчас", value=True)
         with col2:
+            post_date = None
             if not post_now:
                 post_date = st.date_input("Дата публикации")
         with col3:
+            post_time = None
             if not post_now:
                 post_time = st.time_input("Время публикации")
         
@@ -760,6 +764,7 @@ with tabs[0]:
         with st.expander("⚙️ Дополнительные настройки"):
             add_to_calendar = st.checkbox("Добавить в календарь")
             create_series = st.checkbox("Создать серию постов")
+            series_interval = 24
             if create_series:
                 series_interval = st.number_input("Интервал между постами (часы)", 
                                                 min_value=1, value=24)
@@ -871,7 +876,7 @@ with tabs[1]:
         with col_src2:
             if st.button("➕ Добавить источник", use_container_width=True):
                 if new_src_url and new_src_name:
-                    conn.execute("INSERT INTO rss_sources (url, name) VALUES (?, ?)",
+                    conn.execute("INSERT INTO rss_sources (url, name, enabled) VALUES (?, ?, 1)",
                                (new_src_url, new_src_name))
                     conn.commit()
                     st.success("Источник добавлен")
@@ -885,9 +890,11 @@ with tabs[1]:
                 st.write(f"**{source['name']}**")
                 st.caption(source['url'])
             with col2:
-                enabled = st.checkbox("Активен", value=bool(source['enabled']), 
+                # Исправленная проверка на наличие поля enabled
+                is_enabled = bool(source['enabled']) if 'enabled' in source.keys() else True
+                enabled = st.checkbox("Активен", value=is_enabled, 
                                     key=f"enabled_{source['id']}")
-                if enabled != bool(source['enabled']):
+                if enabled != is_enabled:
                     conn.execute("UPDATE rss_sources SET enabled=? WHERE id=?",
                                (int(enabled), source['id']))
                     conn.commit()
@@ -921,9 +928,10 @@ with tabs[1]:
                 with col2:
                     st.write(f"Каждые {rule['interval_hours']}ч")
                 with col3:
-                    active = st.checkbox("Активно", value=bool(rule['is_active']),
+                    is_active = bool(rule['is_active']) if 'is_active' in rule.keys() else True
+                    active = st.checkbox("Активно", value=is_active,
                                        key=f"rule_active_{rule['id']}")
-                    if active != bool(rule['is_active']):
+                    if active != is_active:
                         conn.execute("UPDATE auto_posting_rules SET is_active=? WHERE id=?",
                                    (int(active), rule['id']))
                         conn.commit()
@@ -1072,11 +1080,13 @@ with tabs[3]:
                     st.write(f"🕐 {event['time']}")
                     st.caption(event['description'][:100])
                 with col3:
+                    status_options = ["planned", "in_progress", "completed", "cancelled"]
+                    current_status = event['status'] if event['status'] in status_options else "planned"
                     status = st.selectbox("Статус", 
-                                        ["planned", "in_progress", "completed", "cancelled"],
-                                        index=["planned", "in_progress", "completed", "cancelled"].index(event['status']),
+                                        status_options,
+                                        index=status_options.index(current_status),
                                         key=f"status_{event['id']}")
-                    if status != event['status']:
+                    if status != current_status:
                         conn.execute("UPDATE content_calendar SET status=? WHERE id=?",
                                    (status, event['id']))
                         conn.commit()
