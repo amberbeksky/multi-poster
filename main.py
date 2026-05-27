@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import vk_api
 import telebot
 from telebot.types import InputMediaPhoto
@@ -13,221 +12,14 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import feedparser
 
 # ==========================================
-# 1. VK STYLE DESIGN (LIGHTNING FAST)
+# 1. БАЗОВАЯ НАСТРОЙКА (БЕЗ КАСТОМНОГО CSS)
 # ==========================================
-st.set_page_config(page_title="VK Poster", layout="wide", page_icon="📱")
+st.set_page_config(page_title="Poster", layout="wide")
 
-# Минимальный CSS в стиле ВК - только необходимое, без тяжёлых градиентов
-custom_css = """
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    
-    /* Скрываем лишнее Streamlit */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    
-    /* Базовые цвета как в ВК */
-    .stApp {
-        background: #edeef0;
-        font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    }
-    
-    /* Основной контейнер */
-    .main .block-container {
-        padding: 1rem 2rem;
-        max-width: 1200px;
-    }
-    
-    /* Карточки постов - стиль ВК */
-    div[data-testid="stVerticalBlock"] > div {
-        background: #ffffff;
-        border-radius: 12px;
-        padding: 16px;
-        margin-bottom: 12px;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        border: 1px solid #e7e8ec;
-    }
-    
-    /* Кнопки в стиле ВК */
-    div.stButton > button {
-        background: #5181b8 !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 8px !important;
-        padding: 8px 16px !important;
-        font-weight: 500 !important;
-        font-size: 14px !important;
-        transition: background 0.1s ease !important;
-        width: auto;
-        box-shadow: none !important;
-    }
-    div.stButton > button:hover {
-        background: #4474ab !important;
-        box-shadow: none !important;
-    }
-    
-    /* Вторичные кнопки */
-    div.stButton > button:has(svg) {
-        background: #f5f6f7 !important;
-        color: #2c3e50 !important;
-        border: 1px solid #d0d3d6 !important;
-    }
-    
-    /* Поля ввода */
-    .stTextInput>div>div>input, .stTextArea>div>div>textarea {
-        background-color: #ffffff !important;
-        border: 1px solid #d0d3d6 !important;
-        color: #000000 !important;
-        border-radius: 8px !important;
-        font-size: 14px !important;
-        padding: 10px 12px !important;
-    }
-    .stTextInput>div>div>input:focus, .stTextArea>div>div>textarea:focus {
-        border-color: #5181b8 !important;
-        outline: none;
-    }
-    
-    /* Вкладки как в ВК */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0px;
-        background: #ffffff;
-        border-radius: 12px;
-        padding: 4px;
-        margin-bottom: 16px;
-        border: 1px solid #e7e8ec;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background: transparent;
-        border-radius: 8px;
-        padding: 8px 20px;
-        color: #656565;
-        font-weight: 500;
-        border: none;
-    }
-    .stTabs [aria-selected="true"] {
-        background: #5181b8 !important;
-        color: white !important;
-    }
-    
-    /* Сайдбар */
-    section[data-testid="stSidebar"] {
-        background: #ffffff !important;
-        border-right: 1px solid #e7e8ec;
-        padding: 20px 12px;
-    }
-    
-    /* Аватар и статус */
-    .vk-header {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 12px;
-        background: white;
-        border-radius: 12px;
-        margin-bottom: 20px;
-        border: 1px solid #e7e8ec;
-    }
-    .vk-avatar {
-        width: 48px;
-        height: 48px;
-        background: #5181b8;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-weight: bold;
-        font-size: 20px;
-    }
-    
-    /* Новости RSS в стиле ВК */
-    .news-item {
-        background: white;
-        border-radius: 12px;
-        padding: 16px;
-        margin-bottom: 12px;
-        border: 1px solid #e7e8ec;
-        transition: background 0.1s;
-    }
-    .news-item:hover {
-        background: #f5f7fa;
-    }
-    .news-title {
-        font-weight: 600;
-        font-size: 15px;
-        margin-bottom: 6px;
-        color: #2c3e50;
-    }
-    .news-meta {
-        font-size: 12px;
-        color: #939393;
-        margin-bottom: 8px;
-    }
-    .news-summary {
-        font-size: 13px;
-        color: #656565;
-        line-height: 1.4;
-    }
-    
-    /* Предпросмотр поста */
-    .post-preview {
-        background: #f5f7fa;
-        border-radius: 10px;
-        padding: 12px;
-        font-size: 13px;
-        border-left: 3px solid #5181b8;
-    }
-    
-    /* Медиа галерея */
-    .media-preview {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-top: 10px;
-    }
-    .media-thumb {
-        width: 80px;
-        height: 80px;
-        background: #e7e8ec;
-        border-radius: 8px;
-        object-fit: cover;
-    }
-    
-    /* Анимации - минимальные */
-    .stButton > button, .stTextInput input, .stTextArea textarea {
-        transition: all 0.1s ease;
-    }
-    
-    /* Индикаторы статуса */
-    .status-ok {
-        color: #4bb34b;
-        font-size: 12px;
-    }
-    .status-wait {
-        color: #f0ad4e;
-        font-size: 12px;
-    }
-</style>
-"""
-st.markdown(custom_css, unsafe_allow_html=True)
-
-# Telegram Web App интеграция - легковесная
-components.html(
-    """
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script>
-        if (window.Telegram && window.Telegram.WebApp) {
-            window.Telegram.WebApp.ready();
-            window.Telegram.WebApp.expand();
-        }
-    </script>
-    """,
-    height=0
-)
+# Убрали весь блок custom_css и st.markdown с ним
 
 # ==========================================
-# 2. БАЗА ДАННЫХ - БЫСТРАЯ ИНИЦИАЛИЗАЦИЯ
+# 2. БАЗА ДАННЫХ И ФОНОВЫЕ ЗАДАЧИ
 # ==========================================
 if not os.path.exists("uploads"):
     os.makedirs("uploads")
@@ -258,7 +50,6 @@ def init_db():
 init_db()
 
 def fetch_rss_news():
-    """Лёгкий парсинг RSS без лишних запросов"""
     conn = get_db_connection()
     sources = conn.execute("SELECT * FROM rss_sources").fetchall()
     for source in sources:
@@ -276,7 +67,6 @@ def fetch_rss_news():
     conn.close()
 
 def execute_post(text, media_paths, profile_data, tg_opts, vk_opts, post_id):
-    """Отправка поста - оптимизированная"""
     success_platforms = []
     
     # Telegram отправка
@@ -338,7 +128,7 @@ def init_scheduler():
 scheduler = init_scheduler()
 
 # ==========================================
-# 3. АВТОРИЗАЦИЯ - ЛЁГКАЯ
+# 3. АВТОРИЗАЦИЯ
 # ==========================================
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
@@ -353,20 +143,12 @@ admin = conn.execute("SELECT password_hash FROM admin WHERE id=1").fetchone()
 conn.close()
 
 if not st.session_state.authenticated:
-    st.markdown("""
-        <div style="text-align: center; padding: 40px 20px;">
-            <div style="width: 80px; height: 80px; background: #5181b8; border-radius: 20px; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
-                <span style="font-size: 36px; color: white;">📱</span>
-            </div>
-            <h2 style="color: #2c3e50;">VK Poster</h2>
-            <p style="color: #656565;">Управление постами ВКонтакте и Telegram</p>
-        </div>
-    """, unsafe_allow_html=True)
+    st.title("Вход в Poster")
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if not admin:
-            new_p = st.text_input("Создайте пароль", type="password")
+            new_p = st.text_input("Создайте пароль администратора", type="password")
             if st.button("Создать", use_container_width=True) and new_p:
                 c = get_db_connection()
                 c.execute("INSERT INTO admin VALUES (1, ?)", (hash_pw(new_p),))
@@ -385,205 +167,180 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ==========================================
-# 4. ОСНОВНОЙ ИНТЕРФЕЙС - СТИЛЬ ВК
+# 4. ОСНОВНОЙ ИНТЕРФЕЙС
 # ==========================================
 
-# Шапка в стиле ВК
-st.markdown("""
-    <div class="vk-header">
-        <div class="vk-avatar">📱</div>
-        <div>
-            <div style="font-weight: 600;">VK Poster</div>
-            <div style="font-size: 12px; color: #939393;">Multi-platform publishing</div>
-        </div>
-    </div>
-""", unsafe_allow_html=True)
+st.title("Управление публикациями")
 
 conn = get_db_connection()
 
-# Сайдбар с настройками профилей
+# Сайдбар со стандартными контролами
 with st.sidebar:
-    st.markdown("### ⚙️ Настройки")
+    st.header("Настройки")
     
-    if st.button("🚪 Выход", use_container_width=True):
+    if st.button("Выход", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
     
-    st.divider()
+    st.write("---")
     
     profiles = [dict(r) for r in conn.execute("SELECT * FROM profiles").fetchall()]
-    active_name = st.selectbox("Профиль", [p['name'] for p in profiles])
+    active_name = st.selectbox("Активный профиль", [p['name'] for p in profiles])
     active = next(p for p in profiles if p['name'] == active_name)
     
-    st.markdown("#### ВКонтакте")
+    st.subheader("ВКонтакте")
     v_t = st.text_input("Токен VK", value=active['vk_token'], type="password")
-    v_c = st.text_input("ID группы", value=active['vk_chat'])
+    v_c = st.text_input("ID группы (owner_id)", value=active['vk_chat'])
     
-    st.markdown("#### Telegram")
-    t_t = st.text_input("Токен TG", value=active['tg_token'], type="password")
+    st.subheader("Telegram")
+    t_t = st.text_input("Токен бот", value=active['tg_token'], type="password")
     t_c = st.text_input("Chat ID", value=active['tg_chat'])
     
-    if st.button("💾 Сохранить", use_container_width=True):
+    if st.button("Сохранить профиль", use_container_width=True):
         conn.execute("UPDATE profiles SET tg_token=?, tg_chat=?, vk_token=?, vk_chat=? WHERE name=?", 
                     (t_t, t_c, v_t, v_c, active_name))
         conn.commit()
-        st.success("Сохранено")
+        st.success("Настройки сохранены")
     
-    st.divider()
+    st.write("---")
     
-    st.markdown("#### Дополнительно")
+    st.subheader("Опции")
     tg_pm = st.selectbox("Формат TG", ["Markdown", "HTML", "Отключено"])
-    vk_fg = st.checkbox("От имени группы", value=True)
+    vk_fg = st.checkbox("Пост от имени группы", value=True)
 
-# Основные вкладки
-tabs = st.tabs(["✏️ Редактор", "📰 Новости", "📁 Шаблоны", "📋 История"])
+# Основные вкладки без кастомных стилей
+tabs = st.tabs(["Редактор", "Новости", "Шаблоны", "История"])
 
 # Вкладка редактора
 with tabs[0]:
-    # Предпросмотр
-    with st.container():
-        st.markdown("#### Новый пост")
-        
-        # Текст поста
-        text = st.text_area("Текст", value=st.session_state.draft, height=200, placeholder="Что нового?")
-        st.session_state.draft = text
-        
-        # Хэштеги
-        tags = st.text_input("Хэштеги", placeholder="#пример #пост")
-        
-        # Медиа
-        files = st.file_uploader("Фото", type=['png', 'jpg', 'jpeg', 'gif'], accept_multiple_files=True)
-        
-        # Превью медиа
+    st.subheader("Новая публикация")
+    
+    # Текст поста
+    text = st.text_area("Текст поста", value=st.session_state.draft, height=200, placeholder="Введите текст публикации...")
+    st.session_state.draft = text
+    
+    # Хэштеги
+    tags = st.text_input("Хэштеги", placeholder="#ремонтпк #воронеж")
+    
+    # Медиа
+    files = st.file_uploader("Изображения", accept_multiple_files=True)
+    
+    # Превью медиа (стандартное Streamlit)
+    if files:
+        st.write("Превью изображений:")
+        cols = st.columns(min(4, len(files)))
+        for i, f in enumerate(files):
+            with cols[i % 4]:
+                st.image(f, use_container_width=True)
+    
+    st.write("---")
+    
+    # Настройки публикации
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        is_scheduled = st.checkbox("Запланировать на время")
+    with col2:
+        if is_scheduled:
+            date = st.date_input("Дата")
+            time = st.time_input("Время")
+            run_dt = datetime.combine(date, time)
+        else:
+            run_dt = datetime.now()
+    
+    st.write("---")
+    
+    # Кнопка публикации
+    if st.button("Опубликовать", type="primary", use_container_width=True):
+        paths = []
         if files:
-            cols = st.columns(min(4, len(files)))
-            for i, f in enumerate(files):
-                with cols[i % 4]:
-                    st.image(f, use_container_width=True)
+            for f in files:
+                name = f"{datetime.now().strftime('%H%M%S')}_{f.name}"
+                path = os.path.join("uploads", name)
+                with open(path, "wb") as out:
+                    out.write(f.getvalue())
+                paths.append(path)
         
-        # Настройки публикации
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            is_scheduled = st.checkbox("Отложить")
-        with col2:
-            if is_scheduled:
-                date = st.date_input("Дата")
-                time = st.time_input("Время")
-                run_dt = datetime.combine(date, time)
-            else:
-                run_dt = datetime.now()
+        final_text = text
+        if tags:
+            final_text = f"{text}\n\n{tags}"
         
-        # Кнопка публикации
-        if st.button("📤 Опубликовать", type="primary", use_container_width=True):
-            # Сохраняем медиа
-            paths = []
-            if files:
-                for f in files:
-                    name = f"{datetime.now().strftime('%H%M%S')}_{f.name}"
-                    path = os.path.join("uploads", name)
-                    with open(path, "wb") as out:
-                        out.write(f.getvalue())
-                    paths.append(path)
-            
-            # Формируем текст с хэштегами
-            final_text = text
-            if tags:
-                final_text = f"{text}\n\n{tags}"
-            
-            # Сохраняем в БД
-            cur = conn.cursor()
-            cur.execute("INSERT INTO posts (scheduled_time, text, platforms, status, full_text) VALUES (?,?,?,?,?)",
-                       (run_dt.strftime("%Y-%m-%d %H:%M"), final_text[:50] + "...", "VK+TG", "⏳ В очереди", final_text))
-            post_id = cur.lastrowid
-            conn.commit()
-            
-            # Планируем задачу
-            scheduler.add_job(
-                execute_post, 'date', run_date=run_dt,
-                args=[
-                    final_text, paths,
-                    {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
-                    {"parse_mode": tg_pm, "silent": False, "protect": False, "no_preview": True},
-                    {"from_group": vk_fg, "close_comments": False},
-                    post_id
-                ]
-            )
-            
-            st.success(f"✅ Пост запланирован на {run_dt.strftime('%H:%M %d.%m.%Y')}")
-            st.rerun()
+        # Сохраняем в БД (статус "⏳ В очереди" без CSS стилей)
+        cur = conn.cursor()
+        cur.execute("INSERT INTO posts (scheduled_time, text, platforms, status, full_text) VALUES (?,?,?,?,?)",
+                   (run_dt.strftime("%Y-%m-%d %H:%M"), final_text[:50] + "...", "VK+TG", "⏳ В очереди", final_text))
+        post_id = cur.lastrowid
+        conn.commit()
+        
+        # Планируем задачу
+        scheduler.add_job(
+            execute_post, 'date', run_date=run_dt,
+            args=[
+                final_text, paths,
+                {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
+                {"parse_mode": tg_pm, "silent": False, "protect": False, "no_preview": True},
+                {"from_group": vk_fg, "close_comments": False},
+                post_id
+            ]
+        )
+        
+        st.success(f"Готово. Задача запланирована на {run_dt.strftime('%H:%M %d.%m.%Y')}")
+        st.rerun()
 
 # Вкладка новостей RSS
 with tabs[1]:
     col1, col2 = st.columns([3, 1])
+    with col1:
+        st.subheader("Сбор новостей из источников")
     with col2:
-        if st.button("🔄 Обновить", use_container_width=True):
+        if st.button("Обновить RSS", use_container_width=True):
             fetch_rss_news()
             st.rerun()
     
     news = conn.execute("SELECT * FROM rss_news ORDER BY id DESC LIMIT 15").fetchall()
     
     for item in news:
-        with st.container():
-            st.markdown(f"""
-                <div class="news-item">
-                    <div class="news-title">{item['title']}</div>
-                    <div class="news-meta">{item['pub_date']}</div>
-                    <div class="news-summary">{item['summary']}</div>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                if st.button("📝 В пост", key=f"use_{item['id']}", use_container_width=True):
-                    st.session_state.draft = f"{item['title']}\n\n{item['link']}"
-                    st.rerun()
-            with col2:
-                if st.button("🔗 Открыть", key=f"link_{item['id']}", use_container_width=True):
-                    st.markdown(f"[Читать]({item['link']})")
+        st.write(f"**{item['title']}**")
+        st.write(f"*Дата: {item['pub_date']}*")
+        st.write(item['summary'])
+        
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("В редактор", key=f"use_{item['id']}", use_container_width=True):
+                st.session_state.draft = f"{item['title']}\n\n{item['link']}"
+                st.rerun()
+        with col2:
+            st.write(f"[Открыть источник]({item['link']})")
+        st.write("---")
 
 # Вкладка шаблонов
 with tabs[2]:
+    st.subheader("Шаблоны постов")
+    
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.markdown("#### Создать шаблон")
-        tm_name = st.text_input("Название")
-        tm_content = st.text_area("Текст шаблона", height=150)
-        if st.button("💾 Сохранить шаблон", use_container_width=True):
+        st.markdown("### Создать шаблон")
+        tm_name = st.text_input("Название шаблона")
+        tm_content = st.text_area("Текст", height=150)
+        if st.button("Сохранить шаблон", use_container_width=True):
             if tm_name and tm_content:
                 conn.execute("INSERT OR REPLACE INTO templates VALUES (?,?)", (tm_name, tm_content))
                 conn.commit()
-                st.success("Сохранено")
+                st.success("Шаблон сохранен")
                 st.rerun()
     
     with col2:
-        st.markdown("#### Мои шаблоны")
+        st.markdown("### Использовать шаблон")
         templates = conn.execute("SELECT * FROM templates").fetchall()
         for tm in templates:
-            if st.button(f"📄 {tm['name']}", key=f"tmpl_{tm['name']}", use_container_width=True):
+            if st.button(tm['name'], key=f"tmpl_{tm['name']}", use_container_width=True):
                 st.session_state.draft = tm['content']
                 st.rerun()
 
-# Вкладка истории
+# Вкладка истории (стандартная таблица DataFrame)
 with tabs[3]:
+    st.subheader("Последние публикации")
     posts = pd.read_sql_query("SELECT id, scheduled_time, text, status FROM posts ORDER BY id DESC LIMIT 30", conn)
-    if not posts.empty:
-        for _, post in posts.iterrows():
-            status_class = "status-ok" if "✅" in post['status'] else "status-wait"
-            st.markdown(f"""
-                <div style="background: white; border-radius: 10px; padding: 12px; margin-bottom: 8px; border: 1px solid #e7e8ec;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-                        <span style="font-size: 12px; color: #939393;">{post['scheduled_time']}</span>
-                        <span class="{status_class}" style="font-size: 11px;">{post['status']}</span>
-                    </div>
-                    <div style="font-size: 13px;">{post['text']}</div>
-                </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-            <div style="text-align: center; padding: 40px; color: #939393;">
-                📭 История постов пуста
-            </div>
-        """, unsafe_allow_html=True)
+    st.dataframe(posts, use_container_width=True, hide_index=True)
 
 conn.close()
