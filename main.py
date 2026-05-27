@@ -10,15 +10,14 @@ from datetime import datetime
 import re
 import hashlib
 from apscheduler.schedulers.background import BackgroundScheduler
+import feedparser
 
 # ==========================================
 # 1. БАЗОВАЯ НАСТРОЙКА И ИНИЦИАЛИЗАЦИЯ
 # ==========================================
 st.set_page_config(page_title="Multi-Poster GOD MODE", layout="wide", page_icon="⚡")
 
-# ==========================================
-# 1.5 ИНТЕГРАЦИЯ С TELEGRAM WEB APP
-# ==========================================
+# Интеграция с Telegram Web App
 components.html(
     """
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -46,91 +45,58 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS admin 
-                 (id INTEGER PRIMARY KEY, password_hash TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS profiles 
-                 (name TEXT PRIMARY KEY, tg_token TEXT, tg_chat TEXT, vk_token TEXT, vk_chat TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS posts 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, scheduled_time TEXT, text TEXT, platforms TEXT, status TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS templates 
-                 (name TEXT PRIMARY KEY, content TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS admin (id INTEGER PRIMARY KEY, password_hash TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS profiles (name TEXT PRIMARY KEY, tg_token TEXT, tg_chat TEXT, vk_token TEXT, vk_chat TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY AUTOINCREMENT, scheduled_time TEXT, text TEXT, platforms TEXT, status TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS templates (name TEXT PRIMARY KEY, content TEXT)''')
     
-    c.execute("SELECT COUNT(*) FROM profiles")
-    if c.fetchone()[0] == 0:
+    # Таблицы для RSS
+    c.execute('''CREATE TABLE IF NOT EXISTS rss_sources (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT, name TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS rss_news (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, link TEXT, summary TEXT, pub_date TEXT)''')
+    
+    # Базовые данные
+    if c.execute("SELECT COUNT(*) FROM profiles").fetchone()[0] == 0:
         c.execute("INSERT INTO profiles VALUES ('Основной', '', '', '', '')")
-    
-    c.execute("SELECT COUNT(*) FROM templates")
-    if c.fetchone()[0] == 0:
+    if c.execute("SELECT COUNT(*) FROM templates").fetchone()[0] == 0:
         c.execute("INSERT INTO templates VALUES ('IT Услуги', 'Ремонт ПК, настройка ПО.\\n#услуги')")
-    
+    if c.execute("SELECT COUNT(*) FROM rss_sources").fetchone()[0] == 0:
+        # Добавляем профильные ленты по умолчанию
+        c.execute("INSERT INTO rss_sources (url, name) VALUES ('https://habr.com/ru/rss/hub/sys_admin/all/', 'Хабр: Системное администрирование')")
+        c.execute("INSERT INTO rss_sources (url, name) VALUES ('https://habr.com/ru/rss/hub/infosecurity/all/', 'Хабр: Информационная безопасность')")
+        
     conn.commit()
     conn.close()
 
 init_db()
 
-@st.cache_resource
-def init_scheduler():
-    scheduler = BackgroundScheduler()
-    scheduler.start()
-    return scheduler
-
-scheduler = init_scheduler()
-
-if 'draft' not in st.session_state:
-    st.session_state.draft = ""
-
 # ==========================================
-# 2. СИСТЕМА АВТОРИЗАЦИИ (ВХОД)
+# 2. ФОНОВЫЕ ЗАДАЧИ (RSS и Отправка)
 # ==========================================
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-conn = get_db_connection()
-c = conn.cursor()
-c.execute("SELECT password_hash FROM admin WHERE id=1")
-admin_row = c.fetchone()
-conn.close()
-
-if not st.session_state.authenticated:
-    st.title("🔒 Панель управления")
+def fetch_rss_news():
+    """Фоновая задача для сбора новостей"""
+    conn = get_db_connection()
+    sources = conn.execute("SELECT * FROM rss_sources").fetchall()
     
-    if not admin_row:
-        st.info("Добро пожаловать! Это первый запуск. Задайте Мастер-пароль для защиты панели.")
-        new_pass = st.text_input("Придумайте пароль", type="password")
-        new_pass_confirm = st.text_input("Повторите пароль", type="password")
-        
-        if st.button("Сохранить и войти"):
-            if new_pass and new_pass == new_pass_confirm:
-                pwd_hash = hash_password(new_pass)
-                conn = get_db_connection()
-                conn.execute("INSERT INTO admin (id, password_hash) VALUES (1, ?)", (pwd_hash,))
-                conn.commit()
-                conn.close()
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("Пароли не совпадают или пусто!")
-    else:
-        st.write("Введите Мастер-пароль для доступа.")
-        pwd_input = st.text_input("Пароль", type="password")
-        if st.button("Войти"):
-            if hash_password(pwd_input) == admin_row['password_hash']:
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("❌ Неверный пароль!")
-    
-    st.stop()
+    for source in sources:
+        try:
+            feed = feedparser.parse(source['url'])
+            # Берем 5 самых свежих новостей из каждой ленты
+            for entry in feed.entries[:5]:
+                # Проверяем, нет ли уже такой новости в базе
+                exists = conn.execute("SELECT COUNT(*) FROM rss_news WHERE link=?", (entry.link,)).fetchone()[0]
+                if exists == 0:
+                    clean_summary = re.sub(r'<[^>]+>', '', entry.summary)[:300] + "..." # Очистка от HTML
+                    conn.execute("INSERT INTO rss_news (title, link, summary, pub_date) VALUES (?, ?, ?, ?)", 
+                                 (entry.title, entry.link, clean_summary, entry.published))
+        except Exception as e:
+            print(f"Ошибка парсинга RSS {source['url']}: {e}")
+            
+    conn.commit()
+    conn.close()
 
-# ==========================================
-# 3. ФОНОВЫЙ ДВИЖОК ОТПРАВКИ
-# ==========================================
 def execute_post(text, media_paths, profile_data, tg_opts, vk_opts, post_id):
+    """Фоновая задача отправки постов"""
     success_platforms = []
-    
     tg_token, tg_chat = profile_data['tg_token'], profile_data['tg_chat']
     vk_token, vk_chat = profile_data['vk_token'], profile_data['vk_chat']
     
@@ -139,30 +105,14 @@ def execute_post(text, media_paths, profile_data, tg_opts, vk_opts, post_id):
         try:
             bot = telebot.TeleBot(tg_token)
             pm = None if tg_opts['parse_mode'] == "Отключено" else tg_opts['parse_mode']
-            
             if not media_paths:
-                bot.send_message(
-                    tg_chat, text, parse_mode=pm, 
-                    disable_notification=tg_opts['silent'], 
-                    protect_content=tg_opts['protect'],
-                    disable_web_page_preview=tg_opts['no_preview']
-                )
+                bot.send_message(tg_chat, text, parse_mode=pm, disable_notification=tg_opts['silent'], protect_content=tg_opts['protect'], disable_web_page_preview=tg_opts['no_preview'])
             elif len(media_paths) == 1:
                 with open(media_paths[0], 'rb') as f:
-                    bot.send_photo(
-                        tg_chat, f, caption=text[:1024], parse_mode=pm,
-                        disable_notification=tg_opts['silent'],
-                        protect_content=tg_opts['protect']
-                    )
+                    bot.send_photo(tg_chat, f, caption=text[:1024], parse_mode=pm, disable_notification=tg_opts['silent'], protect_content=tg_opts['protect'])
             else:
-                media = []
-                for i, path in enumerate(media_paths):
-                    with open(path, 'rb') as f:
-                        file_data = f.read()
-                        caption = text[:1024] if i == 0 else None
-                        media.append(InputMediaPhoto(file_data, caption=caption, parse_mode=pm))
+                media = [InputMediaPhoto(open(p, 'rb').read(), caption=(text[:1024] if i==0 else None), parse_mode=pm) for i, p in enumerate(media_paths)]
                 bot.send_media_group(tg_chat, media, disable_notification=tg_opts['silent'], protect_content=tg_opts['protect'])
-            
             success_platforms.append("TG")
         except Exception as e:
             print(f"Ошибка TG: {e}")
@@ -173,56 +123,86 @@ def execute_post(text, media_paths, profile_data, tg_opts, vk_opts, post_id):
             vk_session = vk_api.VkApi(token=vk_token)
             vk = vk_session.get_api()
             upload = vk_api.VkUpload(vk_session)
-            attachments = []
-            
-            if media_paths:
-                for path in media_paths:
-                    photo = upload.photo_wall(photos=path)[0]
-                    attachments.append(f"photo{photo['owner_id']}_{photo['id']}")
-            
-            vk.wall.post(
-                owner_id=-int(vk_chat), 
-                message=text, 
-                attachments=",".join(attachments) if attachments else "",
-                from_group=1 if vk_opts['from_group'] else 0,
-                close_comments=1 if vk_opts['close_comments'] else 0
-            )
+            attachments = [f"photo{upload.photo_wall(photos=p)[0]['owner_id']}_{upload.photo_wall(photos=p)[0]['id']}" for p in media_paths] if media_paths else []
+            vk.wall.post(owner_id=-int(vk_chat), message=text, attachments=",".join(attachments), from_group=1 if vk_opts['from_group'] else 0, close_comments=1 if vk_opts['close_comments'] else 0)
             success_platforms.append("VK")
         except Exception as e:
             print(f"Ошибка VK: {e}")
 
-    # Обновление БД
     conn = get_db_connection()
     status = "✅ Опубликовано: " + "+".join(success_platforms) if success_platforms else "❌ Ошибка отправки"
     conn.execute("UPDATE posts SET status = ? WHERE id = ?", (status, post_id))
     conn.commit()
     conn.close()
 
-    # Удаление временных файлов
     for path in media_paths:
         if os.path.exists(path):
             os.remove(path)
 
+@st.cache_resource
+def init_scheduler():
+    scheduler = BackgroundScheduler()
+    # Добавляем задачу на парсинг RSS каждые 4 часа
+    scheduler.add_job(fetch_rss_news, 'interval', hours=4, id='rss_parser', replace_existing=True)
+    scheduler.start()
+    return scheduler
+
+scheduler = init_scheduler()
+
+if 'draft' not in st.session_state:
+    st.session_state.draft = ""
+
 # ==========================================
-# 4. ПОЛЬЗОВАТЕЛЬСКИЙ ИНТЕРФЕЙС (ЗАЩИЩЕНО)
+# 3. СИСТЕМА АВТОРИЗАЦИИ (ВХОД)
+# ==========================================
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+conn = get_db_connection()
+admin_row = conn.execute("SELECT password_hash FROM admin WHERE id=1").fetchone()
+conn.close()
+
+if not st.session_state.authenticated:
+    st.title("🔒 Панель управления")
+    if not admin_row:
+        st.info("Задайте Мастер-пароль для защиты панели.")
+        new_pass = st.text_input("Придумайте пароль", type="password")
+        if st.button("Сохранить и войти") and new_pass:
+            conn = get_db_connection()
+            conn.execute("INSERT INTO admin (id, password_hash) VALUES (1, ?)", (hash_password(new_pass),))
+            conn.commit()
+            conn.close()
+            st.session_state.authenticated = True
+            st.rerun()
+    else:
+        pwd_input = st.text_input("Введите Мастер-пароль", type="password")
+        if st.button("Войти"):
+            if hash_password(pwd_input) == admin_row['password_hash']:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("❌ Неверный пароль!")
+    st.stop()
+
+# ==========================================
+# 4. ПОЛЬЗОВАТЕЛЬСКИЙ ИНТЕРФЕЙС
 # ==========================================
 st.title("⚡ Multi-Poster GOD MODE")
-st.write("Сверхмощный SMM-комбайн: Мультиаккаунты, SEO-анализ, UTM-метки, Шаблоны и Защита.")
 
 conn = get_db_connection()
 
-# БОКОВАЯ ПАНЕЛЬ
 with st.sidebar:
     if st.button("🚪 Выйти из панели"):
         st.session_state.authenticated = False
         st.rerun()
         
     st.divider()
-    
     st.header("🗂 Профили API")
     profiles_list = [dict(row) for row in conn.execute("SELECT * FROM profiles").fetchall()]
     profile_names = [p['name'] for p in profiles_list]
-    
     selected_profile_name = st.selectbox("Активный профиль:", profile_names)
     active_profile = next(p for p in profiles_list if p['name'] == selected_profile_name)
     
@@ -236,15 +216,6 @@ with st.sidebar:
                      (tg_token, tg_chat, vk_token, vk_chat, selected_profile_name))
         conn.commit()
         st.success("Сохранено!")
-        
-    new_profile = st.text_input("Новый профиль (название)")
-    if st.button("➕ Создать профиль") and new_profile:
-        try:
-            conn.execute("INSERT INTO profiles (name, tg_token, tg_chat, vk_token, vk_chat) VALUES (?, '', '', '', '')", (new_profile,))
-            conn.commit()
-            st.rerun()
-        except:
-            st.error("Профиль уже существует")
 
     st.divider()
     st.header("⚙️ Telegram Опции")
@@ -257,36 +228,22 @@ with st.sidebar:
     st.header("⚙️ ВКонтакте Опции")
     vk_fg = st.checkbox("Пост от имени группы", value=True)
     vk_cc = st.checkbox("Закрыть комментарии")
-    
-    st.divider()
-    st.caption("Авторизованный доступ. Zelenkov Danil Vadimovich, junior DBA")
 
 # РАБОЧИЕ ВКЛАДКИ
-tab_editor, tab_seo, tab_templates, tab_queue, tab_history = st.tabs([
-    "🚀 Редактор", "🛠 SEO & UTM", "📁 Шаблоны", "⏳ Очередь", "📊 Логи"
+tab_editor, tab_rss, tab_seo, tab_templates, tab_queue, tab_history = st.tabs([
+    "🚀 Редактор", "📡 RSS-Лента", "🛠 SEO & UTM", "📁 Шаблоны", "⏳ Очередь", "📊 Логи"
 ])
 
 # --- ВКЛАДКА: РЕДАКТОР ---
 with tab_editor:
     col1, col2 = st.columns([2, 1])
-    
     with col1:
         post_text = st.text_area("Текст сообщения", value=st.session_state.draft, height=200)
         st.session_state.draft = post_text 
-        
         hashtags = st.text_input("Хэштеги (через пробел)")
         uploaded_files = st.file_uploader("Изображения (Мультизагрузка)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
         
     with col2:
-        st.subheader("Монитор лимитов")
-        full_len = len(post_text + hashtags)
-        if uploaded_files and full_len > 1024:
-            st.error(f"⚠️ Текст с фото ({full_len}/1024) превышает лимит TG! Будет обрезан.")
-        elif not uploaded_files and full_len > 4096:
-            st.error(f"⚠️ Текст ({full_len}/4096) превышает лимит TG.")
-        else:
-            st.success(f"✅ Длина в норме ({full_len} симв.)")
-            
         st.subheader("Настройки времени")
         is_scheduled = st.checkbox("Отложенный пост")
         if is_scheduled:
@@ -300,6 +257,39 @@ with tab_editor:
 
         submit_btn = st.button("🔥 ОТПРАВИТЬ", use_container_width=True, type="primary")
 
+# --- ВКЛАДКА: RSS ЛЕНТА ---
+with tab_rss:
+    st.subheader("Новости отрасли (Автосбор)")
+    
+    if st.button("🔄 Принудительно собрать свежие новости"):
+        with st.spinner("Опрашиваем RSS-источники..."):
+            fetch_rss_news()
+        st.success("Лента обновлена!")
+        st.rerun()
+        
+    news_items = conn.execute("SELECT * FROM rss_news ORDER BY id DESC LIMIT 15").fetchall()
+    
+    if not news_items:
+        st.info("Новостей пока нет. Нажми кнопку обновления.")
+    else:
+        for item in news_items:
+            with st.container(border=True):
+                st.markdown(f"**{item['title']}**")
+                st.caption(f"Дата: {item['pub_date']}")
+                st.write(item['summary'])
+                
+                c_btn1, c_btn2 = st.columns([1, 4])
+                with c_btn1:
+                    if st.button("📝 В черновик", key=f"use_{item['id']}"):
+                        # Формируем готовый пост и кидаем в редактор
+                        st.session_state.draft = f"📌 {item['title']}\n\nПодробности по ссылке:\n{item['link']}\n\n#новости"
+                        # Удаляем новость из ленты
+                        conn.execute("DELETE FROM rss_news WHERE id=?", (item['id'],))
+                        conn.commit()
+                        st.rerun()
+                with c_btn2:
+                    st.markdown(f"[Читать полный текст]({item['link']})")
+
 # --- ВКЛАДКА: SEO & UTM ---
 with tab_seo:
     st.subheader("Генератор UTM")
@@ -310,61 +300,29 @@ with tab_seo:
     with c3: utm_c = st.text_input("Campaign")
     if utm_url and utm_s:
         st.code(f"{utm_url}?utm_source={utm_s}&utm_medium={utm_m}&utm_campaign={utm_c}", language="text")
-        
-    st.divider()
-    st.subheader("Анализатор текста")
-    if post_text:
-        words = len(post_text.split())
-        tags_count = len(re.findall(r'#\w+', post_text + " " + hashtags))
-        has_cta = any(w in post_text.lower() for w in ['купить', 'заказать', 'звоните', 'ссылка', 'переходи'])
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Слов", words)
-        m2.metric("Хэштегов", tags_count, delta="- Теневой бан" if tags_count > 10 else "Ок", delta_color="inverse")
-        m3.metric("Призыв (CTA)", "Есть" if has_cta else "Нет")
 
 # --- ВКЛАДКА: ШАБЛОНЫ ---
 with tab_templates:
-    c_new, c_list = st.columns([1, 2])
-    with c_new:
-        st.subheader("Новый шаблон")
-        t_name = st.text_input("Название")
-        t_text = st.text_area("Текст шаблона", height=150)
-        if st.button("Сохранить"):
-            conn.execute("INSERT OR REPLACE INTO templates (name, content) VALUES (?, ?)", (t_name, t_text))
-            conn.commit()
-            st.success("Сохранено!")
-            st.rerun()
-            
-    with c_list:
-        st.subheader("Ваши шаблоны")
-        db_templates = [dict(row) for row in conn.execute("SELECT * FROM templates").fetchall()]
-        cols = st.columns(2)
-        for i, tpl in enumerate(db_templates):
-            with cols[i % 2]:
-                st.info(f"**{tpl['name']}**")
-                st.caption(tpl['content'][:50] + "...")
-                if st.button("Загрузить", key=f"btn_{tpl['name']}"):
-                    st.session_state.draft = tpl['content']
-                    st.rerun()
+    db_templates = [dict(row) for row in conn.execute("SELECT * FROM templates").fetchall()]
+    cols = st.columns(3)
+    for i, tpl in enumerate(db_templates):
+        with cols[i % 3]:
+            st.info(f"**{tpl['name']}**")
+            if st.button("Загрузить", key=f"btn_{tpl['name']}"):
+                st.session_state.draft = tpl['content']
+                st.rerun()
 
 # --- ВКЛАДКА: ОЧЕРЕДЬ ---
 with tab_queue:
     st.subheader("Активные задачи в фоне")
     jobs = scheduler.get_jobs()
-    if not jobs:
-        st.write("Очередь пуста.")
     for job in jobs:
         st.info(f"⏰ Запуск: {job.next_run_time.strftime('%d.%m.%Y %H:%M:%S')} | ID: {job.id}")
 
 # --- ВКЛАДКА: ЛОГИ ---
 with tab_history:
-    st.subheader("История из БД")
-    if st.button("🔄 Обновить таблицу"):
-        st.rerun()
     df = pd.read_sql_query("SELECT * FROM posts ORDER BY id DESC", conn)
     st.dataframe(df, use_container_width=True, hide_index=True)
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("💾 Экспорт в CSV", data=csv, file_name="smm_full_log.csv", mime="text/csv")
 
 # ==========================================
 # 5. ЛОГИКА ОТПРАВКИ
