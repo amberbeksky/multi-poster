@@ -1,0 +1,3 @@
+flet
+vk_api
+pyTelegramBotAPI
