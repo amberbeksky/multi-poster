@@ -42,55 +42,24 @@ def migrate_database():
     conn = get_db_connection()
     c = conn.cursor()
     
-    # Проверяем и добавляем колонку category в таблице templates
-    try:
-        c.execute("SELECT category FROM templates LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE templates ADD COLUMN category TEXT DEFAULT 'Общие'")
-            conn.commit()
-        except:
-            pass
+    # Список миграций (добавление новых колонок, если их нет)
+    migrations = [
+        "ALTER TABLE templates ADD COLUMN category TEXT DEFAULT 'Общие'",
+        "ALTER TABLE rss_sources ADD COLUMN enabled BOOLEAN DEFAULT 1",
+        "ALTER TABLE rss_sources ADD COLUMN last_fetch TIMESTAMP",
+        "ALTER TABLE auto_posting_rules ADD COLUMN is_active BOOLEAN DEFAULT 1",
+        "ALTER TABLE posts ADD COLUMN media_count INTEGER DEFAULT 0",
+        "ALTER TABLE posts ADD COLUMN full_text TEXT"
+    ]
     
-    # Проверяем и добавляем колонки в таблице rss_sources
-    try:
-        c.execute("SELECT enabled FROM rss_sources LIMIT 1")
-    except sqlite3.OperationalError:
+    for query in migrations:
         try:
-            c.execute("ALTER TABLE rss_sources ADD COLUMN enabled BOOLEAN DEFAULT 1")
+            c.execute(query)
             conn.commit()
-        except:
+        except sqlite3.OperationalError:
+            # Ошибка означает, что колонка уже существует, пропускаем
             pass
-    
-    try:
-        c.execute("SELECT last_fetch FROM rss_sources LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE rss_sources ADD COLUMN last_fetch TIMESTAMP")
-            conn.commit()
-        except:
-            pass
-    
-    # Проверяем и добавляем колонку is_active в таблице auto_posting_rules
-    try:
-        c.execute("SELECT is_active FROM auto_posting_rules LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE auto_posting_rules ADD COLUMN is_active BOOLEAN DEFAULT 1")
-            conn.commit()
-        except:
-            pass
-    
-    # Проверяем и добавляем колонку media_count в таблице posts
-    try:
-        c.execute("SELECT media_count FROM posts LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            c.execute("ALTER TABLE posts ADD COLUMN media_count INTEGER DEFAULT 0")
-            conn.commit()
-        except:
-            pass
-    
+            
     conn.close()
 
 def init_db():
@@ -399,9 +368,23 @@ def auto_post_news():
                 # Публикуем
                 profiles = conn.execute("SELECT * FROM profiles LIMIT 1").fetchone()
                 if profiles:
+                    # Создаем запись в posts для корректной привязки post_id
+                    cur = conn.cursor()
+                    cur.execute("""INSERT INTO posts 
+                                 (scheduled_time, text, platforms, status, full_text, media_count) 
+                                 VALUES (?,?,?,?,?,?)""",
+                              (datetime.now().strftime("%Y-%m-%d %H:%M"), 
+                               text[:100] + "...", 
+                               "VK+TG", 
+                               "⏳ В очереди (авто)", 
+                               text,
+                               0))
+                    new_post_id = cur.lastrowid
+                    conn.commit()
+
                     execute_post(text, [], dict(profiles), 
                                {"parse_mode": "HTML"}, {"from_group": True}, 
-                               news['id'])
+                               new_post_id)
                     
                 conn.execute("UPDATE rss_news SET is_used=1 WHERE id=?", (news['id'],))
                 conn.execute("UPDATE auto_posting_rules SET last_run=CURRENT_TIMESTAMP WHERE id=?", 
@@ -506,12 +489,30 @@ def schedule_series(series_id, start_date, start_time):
     posts = conn.execute("SELECT * FROM series_posts WHERE series_id=? ORDER BY post_number", 
                         (series_id,)).fetchall()
     
+    # Получаем профиль для токенов
+    profile = conn.execute("SELECT * FROM profiles LIMIT 1").fetchone()
+    profile_data = dict(profile) if profile else {"tg_token": "", "tg_chat": "", "vk_token": "", "vk_chat": ""}
+    
     if series and posts:
         base_datetime = datetime.combine(start_date, start_time)
         
         for i, post in enumerate(posts):
             post_time = base_datetime + timedelta(hours=i * series['interval_hours'])
             media_files = json.loads(post['media_files']) if post['media_files'] else []
+            
+            # Создаем запись в основной таблице постов для трекинга статуса
+            cur = conn.cursor()
+            cur.execute("""INSERT INTO posts 
+                         (scheduled_time, text, platforms, status, full_text, media_count) 
+                         VALUES (?,?,?,?,?,?)""",
+                      (post_time.strftime("%Y-%m-%d %H:%M"), 
+                       post['text'][:100] + "...", 
+                       "VK+TG", 
+                       "⏳ В очереди (серия)", 
+                       post['text'],
+                       len(media_files)))
+            new_post_id = cur.lastrowid
+            conn.commit()
             
             # Планируем каждый пост
             scheduler.add_job(
@@ -521,10 +522,10 @@ def schedule_series(series_id, start_date, start_time):
                 args=[
                     post['text'],
                     media_files,
-                    {"tg_token": "", "tg_chat": "", "vk_token": "", "vk_chat": ""},
+                    profile_data,
                     {"parse_mode": "HTML"},
                     {"from_group": True},
-                    post['id']
+                    new_post_id
                 ]
             )
         
@@ -1125,9 +1126,23 @@ with tabs[1]:
                     if st.button("🚀 Опубликовать", key=f"pub_{item_dict['id']}", use_container_width=True):
                         text = f"{item_dict.get('title', '')}\n\n{item_dict.get('summary', '')}\n\n{item_dict.get('link', '')}"
                         try:
+                            # Создаем запись в posts
+                            cur = conn.cursor()
+                            cur.execute("""INSERT INTO posts 
+                                         (scheduled_time, text, platforms, status, full_text, media_count) 
+                                         VALUES (?,?,?,?,?,?)""",
+                                      (datetime.now().strftime("%Y-%m-%d %H:%M"), 
+                                       text[:100] + "...", 
+                                       "VK+TG", 
+                                       "⏳ В очереди", 
+                                       text,
+                                       0))
+                            new_post_id = cur.lastrowid
+                            conn.commit()
+                            
                             execute_post(text, [], 
                                        {"tg_token": t_t, "tg_chat": t_c, "vk_token": v_t, "vk_chat": v_c},
-                                       {"parse_mode": "HTML"}, {"from_group": True}, item_dict['id'])
+                                       {"parse_mode": "HTML"}, {"from_group": True}, new_post_id)
                             conn.execute("UPDATE rss_news SET is_used=1 WHERE id=?", (item_dict['id'],))
                             conn.commit()
                             st.success("Новость опубликована!")
